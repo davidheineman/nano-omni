@@ -1,0 +1,23 @@
+[project]
+name = "nano-omni"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+dependencies = [
+    "torch==2.10",
+    "numpy",
+    "tqdm",
+    "kernels==0.13.0",          # runtime FA3 kernel fetch in train_gpt.py (get_kernel)
+    "huggingface-hub",          # used by `kernels`, and by all data-prep downloads
+    "setuptools",
+    "typing-extensions==4.15.0",
+]
+
+[project.optional-dependencies]
+data = ["datasets", "tiktoken"]
+audio = ["tiktoken", "tokenizers", "pyarrow"]
+vision = ["datasets", "tiktoken", "transformers", "safetensors", "pillow"]
+all = ["datasets", "tiktoken", "tokenizers", "pyarrow", "transformers", "safetensors", "pillow"]
+
+[tool.uv]
+package = false

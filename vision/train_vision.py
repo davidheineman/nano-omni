@@ -13,12 +13,12 @@ Data path -> model:
   text+<im_patch> tokens -> GPT.embed -> features ADDED at <im_patch> positions -> GPT blocks -> lm_head
   loss = masked cross-entropy over assistant-response tokens only.
 
-Run from the repo root under the same torchrun launch the speedrun uses (needs CUDA +
-FlashAttention-3, i.e. Hopper). This file lives in vision/; train_gpt.py stays at the repo root.
-  torchrun --standalone --nproc_per_node=1 vision/train_vision.py \
-      --backbone logs/<run_id>/state_step001390.pt \
-      --siglip   results/vision/siglip_so400m_378.pt \
-      --hf_dataset HuggingFaceM4/ChartQA          # or: --synthetic  (random images, no data needed)
+Run from the repo root (needs CUDA + FlashAttention-3, i.e. Hopper; this file lives in vision/,
+train_gpt.py stays at the repo root). The defaults reproduce the verified run — newest
+logs/*/state_step*.pt backbone + results/vision/siglip_so400m_378.pt + data/vision/molmo2_sft:
+  torchrun --standalone --nproc_per_node=1 vision/train_vision.py
+  # smoke (no data/weights): ... --synthetic --backbone "" --siglip ""
+  # override:                ... --backbone <ckpt> --hf_dataset <name> --max_steps 1000
 
 The vision modules + preprocessor below are pure torch/numpy and import fine on CPU (the heavyweight
 ``import train_gpt`` is deferred to :func:`build_backbone`), so the preprocessor alignment invariant
@@ -61,27 +61,27 @@ class VisionConfig:
 
 @dataclasses.dataclass
 class TrainConfig:
-    backbone: str = ""          # path to speedrun checkpoint (logs/<run_id>/state_step*.pt); "" -> random GPT
-    siglip: str = ""            # path to converted SigLIP weights (.pt); "" -> random ViT
-    out_dir: str = "logs/vision_sft"
-    # data source (exactly one): --synthetic, or --hf_dataset <name>
-    data_dir: str = ""          # local dir from data/vision/molmo2_sft.py (train.jsonl/val.jsonl + images/)
-    synthetic: bool = False     # random images + trivial Q/A; no data download needed (smoke test)
+    backbone: str = "auto"      # "auto" -> newest logs/*/state_step*.pt; "" -> random GPT; or an explicit path
+    siglip: str = "results/vision/siglip_so400m_378.pt"   # "" -> random ViT (from vision/convert_siglip.py)
+    out_dir: str = "results/vision/checkpoints"
+    # data source (exactly one): --data_dir (local), --hf_dataset <name>, or --synthetic
+    data_dir: str = "data/vision/molmo2_sft"   # {train,val}.jsonl + images/ (from data/vision/molmo2_sft.py)
+    synthetic: bool = False     # random images + trivial Q/A; no data/weights needed (smoke test)
     hf_dataset: str = ""        # a single HF dataset with bundled images, e.g. HuggingFaceM4/ChartQA
     hf_train_split: str = "train"
     hf_val_split: str = "val"
-    # optimization
+    # optimization (defaults reproduce the verified 300-step ChartQA/molmo2_sft run on 1xH200)
     seq_len: int = 2048         # max packed tokens per micro-sequence
-    device_batch_size: int = 8  # examples per micro-batch (packed into one 1-D sequence)
-    max_steps: int = 20000
+    device_batch_size: int = 2  # examples per micro-batch (packed into one 1-D sequence)
+    max_steps: int = 300
     warmup_steps: int = 200
     connector_lr: float = 2e-4  # connector trains from scratch -> highest LR
     vit_lr: float = 6e-6        # pretrained ViT -> tiny LR
     llm_lr: float = 2e-5        # pretrained LLM -> small LR
     weight_decay: float = 0.0
     grad_clip: float = 1.0
-    val_every: int = 500
-    val_batches: int = 50
+    val_every: int = 50
+    val_batches: int = 8
     seed: int = 90218
 
 
@@ -422,6 +422,11 @@ class VisionGPT(nn.Module):
 # ===========================================================================
 def build_backbone(ckpt_path: str, vcfg: VisionConfig):
     """Import the (guarded) speedrun module, instantiate GPT, load the checkpoint, wrap vision."""
+    # SFT uses the GPT eval-branch (no FP8), and some compute nodes carry a stray/broken HTTP proxy
+    # that breaks train_gpt's FA3 get_kernel fetch -- set both before importing train_gpt.
+    os.environ.setdefault("DISABLE_FP8", "1")
+    for _p in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "all_proxy"):
+        os.environ.pop(_p, None)
     # This file lives in vision/; train_gpt.py + triton_kernels.py are at the repo root. Put the
     # repo root on sys.path and point sys.argv[0] at train_gpt.py so its top-level
     # `open(dirname(sys.argv[0])/triton_kernels.py)` (it reads its own source for logging) resolves.
@@ -661,15 +666,22 @@ def main():
     vcfg = VisionConfig()
 
     torch.manual_seed(cfg.seed)
-    vgpt, _device, _world_size = build_backbone(cfg.backbone, vcfg)
+
+    backbone = cfg.backbone
+    if backbone == "auto":  # newest speedrun checkpoint (the pretrain job writes to logs/<run_id>/)
+        import glob
+        cands = sorted(glob.glob("logs/*/state_step*.pt"), key=os.path.getmtime)
+        backbone = cands[-1] if cands else ""
+        print(f"[backbone] auto -> {backbone or '(none found; random GPT)'}")
+    vgpt, _device, _world_size = build_backbone(backbone, vcfg)
 
     # Load pretrained SigLIP into the ViT (keys mirror the converted checkpoint from convert_siglip.py).
-    if cfg.siglip:
+    if cfg.siglip and os.path.exists(cfg.siglip):
         vit_sd = torch.load(cfg.siglip, map_location="cpu", weights_only=False)
         miss, unexp = vgpt.vit.load_state_dict(vit_sd, strict=False)
-        print(f"[siglip] missing={len(miss)} unexpected={len(unexp)}")
+        print(f"[siglip] loaded {cfg.siglip}: missing={len(miss)} unexpected={len(unexp)}")
     else:
-        print("[siglip] no --siglip given: using randomly-initialized ViT (smoke test only)")
+        print(f"[siglip] {cfg.siglip or '(none)'} not found: using randomly-initialized ViT (smoke only)")
     vgpt.vit.to(torch.bfloat16)
 
     from train_gpt import ForwardScheduleConfig, get_bigram_hash

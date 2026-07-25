@@ -1,5 +1,9 @@
 a derivative of https://github.com/KellerJordan/modded-nanogpt for text-vision-speech models.
 
+### branches
+
+- [github.com/davidheineman/nano-omni/tree/finetune](https://github.com/davidheineman/nano-omni/tree/finetune) - pretrain + fine-tune existing record runs
+
 ### setup
 
 ```bash

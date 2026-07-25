@@ -3,3 +3,12 @@ pylog124M/
 __pycache__/
 logs/
 .DS_Store
+data/fineweb/
+data/fineweb10B/
+data/finewebedu10B/
+data/molmo2_sft/
+results/
+wheels/
+audio/data/
+.venv/
+.venv_fa3/

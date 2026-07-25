@@ -8,4 +8,6 @@ pip install -r requirements.txt
 # downloads only the first 900M training tokens to save time
 python data/cached_fineweb10B.py 9
 ./run.sh
+
+# (see SETUP.md for FlashAttention details / running all record runs)
 ```

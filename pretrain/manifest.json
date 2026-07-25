@@ -1,0 +1,848 @@
+{
+ "2024-06-06_AdamW": {
+  "nn": "01",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/01_2024-06-06_AdamW",
+  "record": "2024-06-06_AdamW",
+  "env": null,
+  "kind": "logonly",
+  "status": "infeasible_logonly",
+  "reason": "pure-log baseline (llm.c C code / raw log); no runnable source in repo"
+ },
+ "2024-10-09_SOAP": {
+  "nn": "02",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/02_2024-10-09_SOAP",
+  "record": "2024-10-09_SOAP",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-10-10_Muon": {
+  "nn": "03",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/03_2024-10-10_Muon",
+  "record": "2024-10-10_Muon",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-10-13_llmc": {
+  "nn": "04",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/04_2024-10-13_llmc",
+  "record": "2024-10-13_llmc",
+  "env": null,
+  "kind": "logonly",
+  "status": "infeasible_logonly",
+  "reason": "pure-log baseline (llm.c C code / raw log); no runnable source in repo"
+ },
+ "2024-10-14_ModernArch": {
+  "nn": "05",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/05_2024-10-14_ModernArch",
+  "record": "2024-10-14_ModernArch",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-10-17_DistributedMuon": {
+  "nn": "06",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/06_2024-10-17_DistributedMuon",
+  "record": "2024-10-17_DistributedMuon",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-10-18_PyTorch25": {
+  "nn": "07",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/07_2024-10-18_PyTorch25",
+  "record": "2024-10-18_PyTorch25",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-10-20_ScaleUp1B": {
+  "nn": "08",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/08_2024-10-20_ScaleUp1B",
+  "record": "2024-10-20_ScaleUp1B",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-10-29_Optimizers": {
+  "nn": "09",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/09_2024-10-29_Optimizers",
+  "record": "2024-10-29_Optimizers",
+  "env": ".venv",
+  "kind": "combined",
+  "status": "infeasible_deps",
+  "reason": "aux optimizer-comparison script; imports distributed_shampoo (install pending)"
+ },
+ "2024-11-03_UntieEmbed": {
+  "nn": "10",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/10_2024-11-03_UntieEmbed",
+  "record": "2024-11-03_UntieEmbed",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-04_50Bruns": {
+  "nn": "11",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/11_2024-11-04_50Bruns",
+  "record": "2024-11-04_50Bruns",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-06_ShortcutsTweaks": {
+  "nn": "12",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/12_2024-11-06_ShortcutsTweaks",
+  "record": "2024-11-06_ShortcutsTweaks",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-08_CastBf16": {
+  "nn": "13",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/13_2024-11-08_CastBf16",
+  "record": "2024-11-08_CastBf16",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-09_Replicateleloykun": {
+  "nn": "14",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/14_2024-11-09_Replicateleloykun",
+  "record": "2024-11-09_Replicateleloykun",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-10_ScaleShortcuts": {
+  "nn": "15",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/15_2024-11-10_ScaleShortcuts",
+  "record": "2024-11-10_ScaleShortcuts",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-10_UNetDoubleLr": {
+  "nn": "16",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/16_2024-11-10_UNetDoubleLr",
+  "record": "2024-11-10_UNetDoubleLr",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-14_QuantizedFP4": {
+  "nn": "17",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/17_2024-11-14_QuantizedFP4",
+  "record": "2024-11-14_QuantizedFP4",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-19_FlexAttention": {
+  "nn": "18",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/18_2024-11-19_FlexAttention",
+  "record": "2024-11-19_FlexAttention",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-11-24_WindowWarmup": {
+  "nn": "19",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/19_2024-11-24_WindowWarmup",
+  "record": "2024-11-24_WindowWarmup",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-12-04_ValueEmbed": {
+  "nn": "20",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/20_2024-12-04_ValueEmbed",
+  "record": "2024-12-04_ValueEmbed",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-12-08_UNetValueEmbedsTweaks": {
+  "nn": "21",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/21_2024-12-08_UNetValueEmbedsTweaks",
+  "record": "2024-12-08_UNetValueEmbedsTweaks",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-12-10_MFUTweaks": {
+  "nn": "22",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/22_2024-12-10_MFUTweaks",
+  "record": "2024-12-10_MFUTweaks",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2024-12-17_SparsifyEmbeds": {
+  "nn": "23",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/23_2024-12-17_SparsifyEmbeds",
+  "record": "2024-12-17_SparsifyEmbeds",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-01-04_SoftCap": {
+  "nn": "24",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/24_2025-01-04_SoftCap",
+  "record": "2025-01-04_SoftCap",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-01-13_Fp8LmHead": {
+  "nn": "25",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/25_2025-01-13_Fp8LmHead",
+  "record": "2025-01-13_Fp8LmHead",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-01-16_Sub3Min": {
+  "nn": "26",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/26_2025-01-16_Sub3Min",
+  "record": "2025-01-16_Sub3Min",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-01-26_BatchSize": {
+  "nn": "27",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/27_2025-01-26_BatchSize",
+  "record": "2025-01-26_BatchSize",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-02-01_RuleTweak": {
+  "nn": "28",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/28_2025-02-01_RuleTweak",
+  "record": "2025-02-01_RuleTweak",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-05-09_SkipMLPBlocks": {
+  "nn": "29",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/29_2025-05-09_SkipMLPBlocks",
+  "record": "2025-05-09_SkipMLPBlocks",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-05-24_FasterReduce": {
+  "nn": "30",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/30_2025-05-24_FasterReduce",
+  "record": "2025-05-24_FasterReduce",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-05-24_StableTorch": {
+  "nn": "31",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/31_2025-05-24_StableTorch",
+  "record": "2025-05-24_StableTorch",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-05-25_EvenFasterReduce": {
+  "nn": "32",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/32_2025-05-25_EvenFasterReduce",
+  "record": "2025-05-25_EvenFasterReduce",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-05-25_MuonWithAuxAdamExample": {
+  "nn": "33",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/33_2025-05-25_MuonWithAuxAdamExample",
+  "record": "2025-05-25_MuonWithAuxAdamExample",
+  "env": ".venv",
+  "kind": "combined",
+  "status": "infeasible_deps",
+  "reason": "example script; imports the external `muon` package (install pending)"
+ },
+ "2025-05-30_noallreduce": {
+  "nn": "34",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/34_2025-05-30_noallreduce",
+  "record": "2025-05-30_noallreduce",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-07-12_BosAlign": {
+  "nn": "35",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/35_2025-07-12_BosAlign",
+  "record": "2025-07-12_BosAlign",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-07-13_UpgradeTorch190": {
+  "nn": "36",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/36_2025-07-13_UpgradeTorch190",
+  "record": "2025-07-13_UpgradeTorch190",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-07-18_TritonMuon": {
+  "nn": "37",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/37_2025-07-18_TritonMuon",
+  "record": "2025-07-18_TritonMuon",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-08-23_SparseAttnGate": {
+  "nn": "38",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/38_2025-08-23_SparseAttnGate",
+  "record": "2025-08-23_SparseAttnGate",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-03_FA3": {
+  "nn": "39",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/39_2025-09-03_FA3",
+  "record": "2025-09-03_FA3",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-05_SkipMLPBlocks": {
+  "nn": "40",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/40_2025-09-05_SkipMLPBlocks",
+  "record": "2025-09-05_SkipMLPBlocks",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-10_Yarn": {
+  "nn": "41",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/41_2025-09-10_Yarn",
+  "record": "2025-09-10_Yarn",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-11_VectSigmoidBFloat16": {
+  "nn": "42",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/42_2025-09-11_VectSigmoidBFloat16",
+  "record": "2025-09-11_VectSigmoidBFloat16",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-15_AsyncDataLoadAttnFinalWindow": {
+  "nn": "43",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/43_2025-09-15_AsyncDataLoadAttnFinalWindow",
+  "record": "2025-09-15_AsyncDataLoadAttnFinalWindow",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-18_Smear": {
+  "nn": "44",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/44_2025-09-18_Smear",
+  "record": "2025-09-18_Smear",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-21_DropAttn": {
+  "nn": "45",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/45_2025-09-21_DropAttn",
+  "record": "2025-09-21_DropAttn",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-23_MuonCustomSizing": {
+  "nn": "46",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/46_2025-09-23_MuonCustomSizing",
+  "record": "2025-09-23_MuonCustomSizing",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-27_BF16CE": {
+  "nn": "47",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/47_2025-09-27_BF16CE",
+  "record": "2025-09-27_BF16CE",
+  "env": ".venv_fa3",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-29_PolarExpress": {
+  "nn": "48",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/48_2025-09-29_PolarExpress",
+  "record": "2025-09-29_PolarExpress",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-09-30_CustomBatching": {
+  "nn": "49",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/49_2025-09-30_CustomBatching",
+  "record": "2025-09-30_CustomBatching",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-10-04_Backout": {
+  "nn": "50",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/50_2025-10-04_Backout",
+  "record": "2025-10-04_Backout",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-10-24_NorMuon": {
+  "nn": "51",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/51_2025-10-24_NorMuon",
+  "record": "2025-10-24_NorMuon",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-10-27_FixMuonLR": {
+  "nn": "52",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/52_2025-10-27_FixMuonLR",
+  "record": "2025-10-27_FixMuonLR",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-10-31_AdamSyncGradientHook": {
+  "nn": "53",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/53_2025-10-31_AdamSyncGradientHook",
+  "record": "2025-10-31_AdamSyncGradientHook",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-11-10_CautiousWD": {
+  "nn": "54",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/54_2025-11-10_CautiousWD",
+  "record": "2025-11-10_CautiousWD",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-11-18_RefineSkip": {
+  "nn": "55",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/55_2025-11-18_RefineSkip",
+  "record": "2025-11-18_RefineSkip",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-11-29_BatchSizeSchedule": {
+  "nn": "56",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/56_2025-11-29_BatchSizeSchedule",
+  "record": "2025-11-29_BatchSizeSchedule",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-10_SALambdaOnWeights": {
+  "nn": "57",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/57_2025-12-10_SALambdaOnWeights",
+  "record": "2025-12-10_SALambdaOnWeights",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-11_NorMuonOptimsAndFixes": {
+  "nn": "58",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/58_2025-12-11_NorMuonOptimsAndFixes",
+  "record": "2025-12-11_NorMuonOptimsAndFixes",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-14_PartialKeyOffset": {
+  "nn": "59",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/59_2025-12-14_PartialKeyOffset",
+  "record": "2025-12-14_PartialKeyOffset",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-18_CautiousWDAdam": {
+  "nn": "60",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/60_2025-12-18_CautiousWDAdam",
+  "record": "2025-12-18_CautiousWDAdam",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-19_RetieLMHead": {
+  "nn": "61",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/61_2025-12-19_RetieLMHead",
+  "record": "2025-12-19_RetieLMHead",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-21_SmoothedScalars": {
+  "nn": "62",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/62_2025-12-21_SmoothedScalars",
+  "record": "2025-12-21_SmoothedScalars",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-22_MultiTokenPrediction": {
+  "nn": "63",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/63_2025-12-22_MultiTokenPrediction",
+  "record": "2025-12-22_MultiTokenPrediction",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-26_LogitRescale": {
+  "nn": "64",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/64_2025-12-26_LogitRescale",
+  "record": "2025-12-26_LogitRescale",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-29_VeSkipGates": {
+  "nn": "65",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/65_2025-12-29_VeSkipGates",
+  "record": "2025-12-29_VeSkipGates",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2025-12-31_GatesToCompiledAdam": {
+  "nn": "66",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/66_2025-12-31_GatesToCompiledAdam",
+  "record": "2025-12-31_GatesToCompiledAdam",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2026-01-04_MixedPrecisionInterweavedOptimizer": {
+  "nn": "67",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/67_2026-01-04_MixedPrecisionInterweavedOptimizer",
+  "record": "2026-01-04_MixedPrecisionInterweavedOptimizer",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2026-01-07_PairedHeadAttention": {
+  "nn": "68",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/68_2026-01-07_PairedHeadAttention",
+  "record": "2026-01-07_PairedHeadAttention",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2026-01-10_FusedLinearReLUSquare": {
+  "nn": "69",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/69_2026-01-10_FusedLinearReLUSquare",
+  "record": "2026-01-10_FusedLinearReLUSquare",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2026-01-16_FusedSoftcappedEntropy": {
+  "nn": "70",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/70_2026-01-16_FusedSoftcappedEntropy",
+  "record": "2026-01-16_FusedSoftcappedEntropy",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": false,
+  "status": "prepared"
+ },
+ "2026-01-18_UnifiedOptimizers": {
+  "nn": "71",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/71_2026-01-18_UnifiedOptimizers",
+  "record": "2026-01-18_UnifiedOptimizers",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-01-19_BigramHashEmbedding": {
+  "nn": "72",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/72_2026-01-19_BigramHashEmbedding",
+  "record": "2026-01-19_BigramHashEmbedding",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-01-24_ImprovedLMHead": {
+  "nn": "73",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/73_2026-01-24_ImprovedLMHead",
+  "record": "2026-01-24_ImprovedLMHead",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-01-26-UntieValueEmbeddings": {
+  "nn": "74",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/74_2026-01-26-UntieValueEmbeddings",
+  "record": "2026-01-26-UntieValueEmbeddings",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-01-30_MimeticValueOutput": {
+  "nn": "75",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/75_2026-01-30_MimeticValueOutput",
+  "record": "2026-01-30_MimeticValueOutput",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-01-30_VeFused": {
+  "nn": "76",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/76_2026-01-30_VeFused",
+  "record": "2026-01-30_VeFused",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-01-31-BigramHashH2D": {
+  "nn": "77",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/77_2026-01-31-BigramHashH2D",
+  "record": "2026-01-31-BigramHashH2D",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-02_KernelTuning": {
+  "nn": "78",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/78_2026-02-02_KernelTuning",
+  "record": "2026-02-02_KernelTuning",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-03_VeTuned": {
+  "nn": "79",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/79_2026-02-03_VeTuned",
+  "record": "2026-02-03_VeTuned",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-06_SparseBigramGradient": {
+  "nn": "80",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/80_2026-02-06_SparseBigramGradient",
+  "record": "2026-02-06_SparseBigramGradient",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-10_ShortWindow": {
+  "nn": "81",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/81_2026-02-10_ShortWindow",
+  "record": "2026-02-10_ShortWindow",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-12_ParallelResiduals": {
+  "nn": "82",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/82_2026-02-12_ParallelResiduals",
+  "record": "2026-02-12_ParallelResiduals",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-16_FlattenForward": {
+  "nn": "83",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/83_2026-02-16_FlattenForward",
+  "record": "2026-02-16_FlattenForward",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-23_CrossEntropyKernel": {
+  "nn": "84",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/84_2026-02-23_CrossEntropyKernel",
+  "record": "2026-02-23_CrossEntropyKernel",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-02-28_TransposeCopyBackward": {
+  "nn": "85",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/85_2026-02-28_TransposeCopyBackward",
+  "record": "2026-02-28_TransposeCopyBackward",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-03-06_SimplifyHC": {
+  "nn": "86",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/86_2026-03-06_SimplifyHC",
+  "record": "2026-03-06_SimplifyHC",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-03-22_VarlenMaxDocs": {
+  "nn": "87",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/87_2026-03-22_VarlenMaxDocs",
+  "record": "2026-03-22_VarlenMaxDocs",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-04-04_FuseCEFwdAndBwd": {
+  "nn": "88",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/88_2026-04-04_FuseCEFwdAndBwd",
+  "record": "2026-04-04_FuseCEFwdAndBwd",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-04-08_PairedHeadMuon": {
+  "nn": "89",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/89_2026-04-08_PairedHeadMuon",
+  "record": "2026-04-08_PairedHeadMuon",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-04-22_MuddFormer": {
+  "nn": "90",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/90_2026-04-22_MuddFormer",
+  "record": "2026-04-22_MuddFormer",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-04-29_XSAGatedLayers": {
+  "nn": "91",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/91_2026-04-29_XSAGatedLayers",
+  "record": "2026-04-29_XSAGatedLayers",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-05-07_XSAGatedLayers": {
+  "nn": "92",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/92_2026-05-07_XSAGatedLayers",
+  "record": "2026-05-07_XSAGatedLayers",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-05-19_FP8MLPUpProj": {
+  "nn": "93",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/93_2026-05-19_FP8MLPUpProj",
+  "record": "2026-05-19_FP8MLPUpProj",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ },
+ "2026-05-20_BigramsSignTrick": {
+  "nn": "94",
+  "dir": "/storage/home/dhei/speedrun/modded-nanogpt/results/pretrain/track_1_short/94_2026-05-20_BigramsSignTrick",
+  "record": "2026-05-20_BigramsSignTrick",
+  "env": ".venv",
+  "kind": "combined",
+  "multifile": true,
+  "status": "prepared"
+ }
+}

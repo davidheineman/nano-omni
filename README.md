@@ -7,7 +7,7 @@ git clone https://github.com/KellerJordan/modded-nanogpt.git && cd modded-nanogp
 pip install -r requirements.txt
 # downloads only the first 900M training tokens to save time
 python data/cached_fineweb10B.py 9
-./run.sh
+torchrun --standalone --nproc_per_node=8 train_gpt.py
 
 # (see SETUP.md for FlashAttention details / running all record runs)
 ```

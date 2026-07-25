@@ -1713,8 +1713,8 @@ def distributed_data_generator(filename_pattern: str, num_tokens: int, max_seq_l
 class Hyperparameters:
     # data
     data_path = os.environ.get("DATA_PATH", ".")
-    train_files: str = os.path.join(data_path, "data/fineweb10B/fineweb_train_*.bin") # input .bin to train on
-    val_files: str = os.path.join(data_path, "data/fineweb10B/fineweb_val_*.bin") # input .bin to eval validation loss on
+    train_files: str = os.path.join(data_path, "data/text/fineweb10B/fineweb_train_*.bin") # input .bin to train on
+    val_files: str = os.path.join(data_path, "data/text/fineweb10B/fineweb_val_*.bin") # input .bin to eval validation loss on
     val_tokens: int = 10485760 # how many tokens of validation data? it's important to keep this fixed for consistent comparisons
     # batch sizes
     val_batch_size: int = 4 * 64 * 1024 * 8

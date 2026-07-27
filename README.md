@@ -14,7 +14,7 @@ uv venv --python 3.12 .venv
 uv sync --extra all
 
 # pull data
-python data/cached_fineweb10B.py 9 # first 900M tokens
+python data/text/cached_fineweb10B.py 9 # first 900M tokens
 python data/vision/molmo2_sft.py
 python data/audio/marin_audio.py
 
@@ -22,14 +22,13 @@ python data/audio/marin_audio.py
 torchrun --standalone --nproc_per_node=8 train_gpt.py
 
 # train text-vision model
-python convert_siglip.py \
-    --model google/siglip-so400m-patch14-384 --out siglip_so400m_378.pt
+python vision/convert_siglip.py --model google/siglip-so400m-patch14-384
 torchrun --standalone --nproc_per_node=1 vision/train_vision.py
 
 # train text-audio model
 torchrun --standalone --nproc_per_node=8 audio/train_audio.py
 
-# (see SETUP.md for FlashAttention details / running all record runs)
+# (see the flash attention 3 section below for the 2025 `*_FA3` record runs)
 ```
 
 ### flash attenion 3 install (optional)

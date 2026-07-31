@@ -4,6 +4,12 @@ a derivative of https://github.com/KellerJordan/modded-nanogpt for text-vision-s
 
 - [github.com/davidheineman/nano-omni/tree/finetune](https://github.com/davidheineman/nano-omni/tree/finetune) - pretrain + fine-tune existing record runs
 
+
+### datasets
+
+- [davidheineman/text-ppl](https://huggingface.co/datasets/davidheineman/text-ppl)
+- [davidheineman/vision-ppl](https://huggingface.co/datasets/davidheineman/vision-ppl)
+
 ### setup
 
 ```bash
@@ -15,7 +21,7 @@ uv sync --extra all
 
 # pull data
 python data/text/cached_fineweb10B.py 9 # first 900M tokens
-python data/vision/molmo2_sft.py
+python data/vision/molmo2_sft_simple.py # minified vision SFT set
 python data/audio/marin_audio.py
 
 # train text model

@@ -15,7 +15,7 @@ Data path -> model:
 
 Run from the repo root (needs CUDA + FlashAttention-3, i.e. Hopper; this file lives in vision/,
 train_gpt.py stays at the repo root). The defaults reproduce the verified run — newest
-logs/*/state_step*.pt backbone + results/vision/siglip_so400m_378.pt + data/vision/molmo2_sft:
+logs/*/state_step*.pt backbone + results/vision/siglip_so400m_378.pt + data/vision/molmo2_sft_simple:
   torchrun --standalone --nproc_per_node=1 vision/train_vision.py
   # smoke (no data/weights): ... --synthetic --backbone "" --siglip ""
   # override:                ... --backbone <ckpt> --hf_dataset <name> --max_steps 1000
@@ -25,14 +25,21 @@ The vision modules + preprocessor below are pure torch/numpy and import fine on 
 can be unit-tested without a GPU.
 """
 import argparse
+import contextlib
 import dataclasses
+import json
 import math
 import os
+import queue
+import statistics
+import threading
+import time
 from functools import lru_cache
 from typing import Optional, Tuple
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -52,7 +59,10 @@ class VisionConfig:
     vit_mlp_dim: int = 4304
     vit_eps: float = 1e-6
     # crop / pooling (olmo MultiCropConfig defaults for molmo2, crop_mode="overlap-and-resize-c2")
-    max_crops: int = 8
+    max_crops: int = 6              # olmo MultiCropConfig max_crops (SFT)
+    high_res_max_crops: int = 24    # olmo high_res_max_crops (SFT); informational for our single-scale port
+    max_multi_image_crops: int = 8  # crops per image when an example has multiple images (sft.py:275)
+    max_images: int = 5             # cap images per example (sft.py:276)
     overlap_margins: Tuple[int, int] = (4, 4)
     pooling_h: int = 2
     pooling_w: int = 2
@@ -65,12 +75,13 @@ class TrainConfig:
     siglip: str = "results/vision/siglip_so400m_378.pt"   # "" -> random ViT (from vision/convert_siglip.py)
     out_dir: str = "results/vision/checkpoints"
     # data source (exactly one): --data_dir (local), --hf_dataset <name>, or --synthetic
-    data_dir: str = "data/vision/molmo2_sft"   # {train,val}.jsonl + images/ (from data/vision/molmo2_sft.py)
+    data_dir: str = "data/vision/molmo2_sft_simple"   # {train,val}.jsonl + images/ (from data/vision/molmo2_sft_simple.py)
+    mix_dir: str = ""           # Molmo2-recipe mix from data/vision/molmo2_sft_full.py (mixture.json + <src>__<split>.jsonl); takes precedence
     synthetic: bool = False     # random images + trivial Q/A; no data/weights needed (smoke test)
     hf_dataset: str = ""        # a single HF dataset with bundled images, e.g. HuggingFaceM4/ChartQA
     hf_train_split: str = "train"
     hf_val_split: str = "val"
-    # optimization (defaults reproduce the verified 300-step ChartQA/molmo2_sft run on 1xH200)
+    # optimization (defaults reproduce the verified 300-step ChartQA/molmo2_sft_simple run on 1xH200)
     seq_len: int = 2048         # max packed tokens per micro-sequence
     device_batch_size: int = 2  # examples per micro-batch (packed into one 1-D sequence)
     max_steps: int = 300
@@ -78,11 +89,18 @@ class TrainConfig:
     connector_lr: float = 2e-4  # connector trains from scratch -> highest LR
     vit_lr: float = 6e-6        # pretrained ViT -> tiny LR
     llm_lr: float = 2e-5        # pretrained LLM -> small LR
+    freeze_vit: bool = True     # DEFAULT ON: freeze the SigLIP ViT (no bwd through it) -> ~1.5x throughput,
+                                # no quality change at this scale. --no-freeze_vit to also fine-tune the ViT.
     weight_decay: float = 0.0
     grad_clip: float = 1.0
     val_every: int = 50
-    val_batches: int = 8
+    val_batches: int = 8          # (synthetic/hf paths) number of val micro-batches
+    val_examples_per_source: int = 128  # (--data_dir path) fixed held-out val examples scored per source
+    text_val_blocks: int = 16   # held-out FineWeb LM-loss blocks (of seq_len) scored each val step (0=off);
+                                # monitors whether the LLM's text ability degrades during vision SFT
     seed: int = 90218
+    max_minutes: float = 0.0      # wallclock training budget (0 = disabled; stop at max_steps instead)
+    metrics_out: str = ""         # JSONL metrics log (train_loss / per-source val / MFU / tokens_per_s); rank-0 only
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +115,9 @@ IM_COL_ID = 50261             # <im_col>     end-of-row marker
 LOW_RES_IM_START_ID = 50262   # <low_res_im_start>
 EOT_ID = 50256                # <|endoftext|> (GPT-2), used as turn/sequence delimiter
 IMAGE_TOKENS = (IM_PATCH_ID, IM_LOW_ID, IM_START_ID, IM_END_ID, IM_COL_ID, LOW_RES_IM_START_ID)
+
+# SigLIP attention precision: fp32 by default (upstream fidelity); VIT_ATTN_BF16=1 -> bf16 (faster).
+_VIT_FP32_ATTN = not bool(os.environ.get("VIT_ATTN_BF16"))
 
 
 # ===========================================================================
@@ -122,8 +143,11 @@ class ViTAttention(nn.Module):
         q = self.wq(q_in).view(B, Nq, h, hd)
         k = self.wk(kv_in).view(B, Nk, h, hd)
         v = self.wv(kv_in).view(B, Nk, h, hd)
-        # SigLIP uses float32 attention for numerical fidelity.
-        q, k, v = q.float(), k.float(), v.float()
+        # SigLIP upstream uses float32 attention for numerical fidelity, but fp32 SDPA runs far below
+        # the bf16 tensor-core rate on H200. VIT_ATTN_BF16=1 keeps it in bf16 (big ViT speedup; the ViT
+        # is being fine-tuned anyway so it absorbs the small precision change).
+        if _VIT_FP32_ATTN:
+            q, k, v = q.float(), k.float(), v.float()
         out = F.scaled_dot_product_attention(
             q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False
         ).transpose(1, 2)
@@ -274,8 +298,9 @@ class MulticropPreprocessor:
         self.patch = cfg.patch_size
         self.cpp = self.crop // self.patch  # crop patches per dim (27)
 
-    def __call__(self, image: np.ndarray):
+    def __call__(self, image: np.ndarray, max_crops: Optional[int] = None):
         cfg = self.cfg
+        mc = max_crops or cfg.max_crops   # multi-image examples cap crops lower (olmo max_multi_image_crops)
         lm, rm = cfg.overlap_margins
         total_margin = self.patch * (lm + rm)
         window_patches = self.cpp - (lm + rm)
@@ -283,7 +308,7 @@ class MulticropPreprocessor:
         H, W = image.shape[:2]
 
         tiling = _select_tiling(max(H - total_margin, 1), max(W - total_margin, 1),
-                                window_size, cfg.max_crops)
+                                window_size, mc)
         src = _siglip_resize(
             image, (tiling[0] * window_size + total_margin, tiling[1] * window_size + total_margin))
 
@@ -386,6 +411,7 @@ class VisionGPT(nn.Module):
         self.gpt = gpt
         self.vit = SiglipViT(vcfg)
         self.connector = Connector(vcfg, out_dim=model_dim)
+        self.freeze_vit = False   # set by main(); when True the ViT runs under no_grad (no backward)
         # Wrap embed AFTER the backbone checkpoint has been loaded (see build_backbone).
         self.gpt.embed = _ImageInjectingEmbed(self.gpt.embed)
 
@@ -397,7 +423,8 @@ class VisionGPT(nn.Module):
         input_seq, images, pooled_idx = batch["input_seq"], batch["images"], batch["pooled_idx"]
         im_mask = (input_seq == IM_PATCH_ID)
         if images.numel() > 0 and bool(im_mask.any()):
-            feats = self.vit(images.to(self.vit.patch_embedding.weight.dtype))
+            with torch.no_grad() if self.freeze_vit else contextlib.nullcontext():
+                feats = self.vit(images.to(self.vit.patch_embedding.weight.dtype))
             img_features = self.connector(feats, pooled_idx)      # (n_valid_pool, model_dim)
             assert int(im_mask.sum()) == img_features.shape[0], \
                 f"<im_patch> count {int(im_mask.sum())} != connector rows {img_features.shape[0]}"
@@ -605,7 +632,7 @@ def iter_hf_examples(name: str, split: str, seed: int):
 
 
 def iter_local_examples(data_dir: str, split: str, seed: int):
-    """Read a local dataset built by data/vision/molmo2_sft.py ({split}.jsonl + images/)."""
+    """Read a local dataset built by data/vision/molmo2_sft_simple.py ({split}.jsonl + images/)."""
     import json
     from PIL import Image
     rows = [json.loads(l) for l in open(os.path.join(data_dir, f"{split}.jsonl"))]
@@ -620,15 +647,215 @@ def iter_local_examples(data_dir: str, split: str, seed: int):
         yield dict(image=img, question=r["question"], answer=r["answer"])
 
 
-def build_data_iters(cfg: "TrainConfig"):
+def load_val_by_source(data_dir: str, per_source: int, seed: int):
+    """A FIXED held-out val set grouped by source (for a comparable, low-variance curve).
+
+    Unlike the rolling val iterator, this returns the *same* deterministically-chosen examples every
+    time validate() runs, so val points at different steps measure the identical set. Rows keep their
+    "source" so we can report per-source loss (much more informative than one blended number).
+    """
+    import json
+    rows = [json.loads(l) for l in open(os.path.join(data_dir, "val.jsonl"))]
+    by_src = {}
+    for r in rows:
+        by_src.setdefault(r["source"], []).append(r)
+    rng = np.random.RandomState(seed)
+    fixed = {}
+    for src in sorted(by_src):
+        rs = by_src[src]
+        idx = rng.permutation(len(rs))[:per_source]
+        fixed[src] = [rs[int(i)] for i in idx]
+    return fixed
+
+
+def load_example_row(data_dir: str, r: dict):
+    from PIL import Image
+    img = np.asarray(Image.open(os.path.join(data_dir, r["image"])).convert("RGB"))
+    return dict(image=img, question=r["question"], answer=r["answer"])
+
+
+# ===========================================================================
+# 6b. Molmo2-recipe mixture path (consumes data/vision/molmo2_sft_full.py output)
+#     mixture.json + <source>__<split>.jsonl rows {image|[image], convos, n_subsegments, message_weight}.
+#     Reproduces Molmo2's sqrt-size weighted sampler + root_subsegments_root_tokens loss weighting +
+#     multi-turn + multi-image ("Image N" prefixes). Loss weights ride in `loss_mask` (a float weight
+#     vector), which VisionGPT.forward already reduces as a weighted mean -- no forward change needed.
+# ===========================================================================
+def load_mixture(mix_dir: str):
+    """-> (source->sampling_prob, source->message_weight). Sampling = sqrt(size) normed within group
+    x group weight, then globally normed (port of olmo DataLoaderConfig._build_mixture)."""
+    import json
+    m = json.load(open(os.path.join(mix_dir, "mixture.json")))
+    rate, mw = {}, {}
+    for g in m["groups"].values():
+        sizes = {d["source"]: math.sqrt(max(d["size"], 1.0)) for d in g["datasets"]}
+        tot = sum(sizes.values()) or 1.0
+        for d in g["datasets"]:
+            rate[d["source"]] = sizes[d["source"]] / tot * g["weight"]
+            mw[d["source"]] = d.get("message_weight", 1.0)
+    z = sum(rate.values()) or 1.0
+    return {k: v / z for k, v in rate.items()}, mw
+
+
+def _load_mix_rows(mix_dir: str, split: str):
+    import glob, json
+    out = {}
+    for p in glob.glob(os.path.join(mix_dir, f"*__{split}.jsonl")):
+        src = os.path.basename(p).split("__")[0]
+        rows = [json.loads(l) for l in open(p)]
+        if rows:
+            out[src] = rows
+    return out
+
+
+def _flatten_convos(row):
+    """message_list subsegments -> one multi-turn stream sharing the image; n_subseg for root weighting."""
+    convos = row.get("convos") or []
+    turns = [t for c in convos for t in c]
+    return turns, max(len(convos), 1)
+
+
+def iter_mix_examples(mix_dir: str, split: str, seed: int):
+    rate, mw = load_mixture(mix_dir)
+    rows = _load_mix_rows(mix_dir, split)
+    srcs = [s for s in rate if s in rows]
+    if not srcs:
+        raise SystemExit(f"{mix_dir}: no {split} rows for any source in mixture.json")
+    probs = np.array([rate[s] for s in srcs], dtype=np.float64); probs /= probs.sum()
+    rng = np.random.RandomState(seed)
+    order = {s: rng.permutation(len(rows[s])) for s in srcs}
+    ptr = {s: 0 for s in srcs}
+    while True:
+        s = srcs[int(rng.choice(len(srcs), p=probs))]
+        if ptr[s] >= len(order[s]):
+            order[s] = rng.permutation(len(rows[s])); ptr[s] = 0
+        r = rows[s][int(order[s][ptr[s]])]; ptr[s] += 1
+        turns, n_sub = _flatten_convos(r)
+        if len(turns) < 2:
+            continue
+        img = r.get("image")
+        imgs = img if isinstance(img, list) else ([img] if img else [])
+        yield dict(images=imgs, turns=turns, n_subsegments=n_sub,
+                   message_weight=mw.get(s, 1.0), source=s, mix_dir=mix_dir)
+
+
+def mix_row_to_example(row, mix_dir):
+    """A materialized mix row -> the example dict collate_mix/iter_mix_examples consume."""
+    turns, n_sub = _flatten_convos(row)
+    img = row.get("image")
+    imgs = img if isinstance(img, list) else ([img] if img else [])
+    return dict(images=imgs, turns=turns, n_subsegments=n_sub,
+                message_weight=row.get("message_weight", 1.0), source=row.get("source"), mix_dir=mix_dir)
+
+
+def _image_segment(pre: "MulticropPreprocessor", vcfg: VisionConfig, enc, imgs, mix_dir):
+    """Preprocess 0+ images -> (token_ids, crops[N,729,588], pooled[n,4] offset within this example).
+    Multi-image: each image after the first is prefixed with literal text 'Image {i+1}: '."""
+    from PIL import Image
+    if not imgs:
+        return np.zeros(0, np.int64), np.zeros((0, pre.cpp * pre.cpp * 3), np.float32), np.zeros((0, 4), np.int64)
+    mc = None if len(imgs) <= 1 else vcfg.max_multi_image_crops
+    seg, crops, pooled, crop_off = [], [], [], 0
+    for i, rel in enumerate(imgs[:vcfg.max_images]):
+        arr = np.asarray(Image.open(os.path.join(mix_dir, rel)).convert("RGB"))
+        toks, cr, pl = pre(arr, max_crops=mc)
+        if i > 0:
+            seg.append(np.asarray(enc.encode(f" Image {i + 1}: "), dtype=np.int64))
+        seg.append(np.asarray(toks, dtype=np.int64))
+        pl = np.where(pl >= 0, pl + crop_off, -1)
+        crop_off += cr.shape[0] * (pre.cpp * pre.cpp)
+        crops.append(cr); pooled.append(pl)
+    return (np.concatenate(seg), np.concatenate(crops, 0), np.concatenate(pooled, 0))
+
+
+def encode_mix_turns(enc, seg_ids, turns, msg_weight, n_subseg, seq_len):
+    """Build (input_ids, target_ids, loss_weight) for [image seg][user0][asst0][user1][asst1]...
+    Per-token loss weight on assistant tokens = message_weight / sqrt(#asst tokens) / sqrt(#subsegments)
+    (Molmo2 root_subsegments_root_tokens); 0 elsewhere and on image-placeholder targets."""
+    full, wfull = [], []
+    if seg_ids.size:
+        full.append(seg_ids); wfull.append(np.zeros(seg_ids.size))
+    for k in range(0, len(turns) - 1, 2):
+        u_ids = np.asarray(enc.encode(f"\nUser: {turns[k]}\nAssistant:"), np.int64)
+        a_ids = np.asarray(enc.encode(f" {turns[k + 1]}") + [EOT_ID], np.int64)
+        full.append(u_ids); wfull.append(np.zeros(u_ids.size))
+        w = msg_weight / math.sqrt(max(a_ids.size, 1)) / math.sqrt(max(n_subseg, 1))
+        full.append(a_ids); wfull.append(np.full(a_ids.size, w, dtype=np.float64))
+    ids = np.concatenate(full)[:seq_len]
+    wt = np.concatenate(wfull)[:seq_len]
+    input_ids, target_ids = ids[:-1], ids[1:]
+    loss_w = wt[1:].astype(np.float64).copy()
+    loss_w[np.isin(target_ids, IMAGE_TOKENS)] = 0.0   # never supervise image placeholders
+    return input_ids, target_ids, loss_w
+
+
+def collate_mix(examples, seq_len, pre: "MulticropPreprocessor", vcfg: VisionConfig):
+    """Pack mixture examples (multi-image, multi-turn, weighted) into one 1-D varlen batch."""
+    enc = _get_tokenizer()
+    all_in, all_tgt, all_w, seqlens, all_crops, all_pool = [], [], [], [], [], []
+    pool_offset = 0
+    for ex in examples:
+        seg, crops, pooled = _image_segment(pre, vcfg, enc, ex["images"], ex["mix_dir"])
+        inp, tgt, w = encode_mix_turns(enc, seg, ex["turns"], ex["message_weight"],
+                                       ex["n_subsegments"], seq_len)
+        # encode_mix_turns truncates the token stream to seq_len, which can cut trailing <im_patch>
+        # tokens off a large (esp. multi-image) example while crops/pooled still carry every row.
+        # The forward requires (# <im_patch>) == (# connector rows == pooled rows). <im_patch> tokens
+        # all live in the front image segment and map 1:1, in order, to pooled rows -> the survivors
+        # are a prefix, so keep the first k pooled rows (and only the crops those rows reference).
+        k = int((inp == IM_PATCH_ID).sum())
+        if k < pooled.shape[0]:
+            pooled = pooled[:k]
+            valid = pooled[pooled >= 0]
+            n_cr = (int(valid.max()) // (pre.cpp * pre.cpp) + 1) if valid.size else 0
+            crops = crops[:n_cr]
+        if crops.shape[0]:
+            pooled = np.where(pooled >= 0, pooled + pool_offset, -1)
+            pool_offset += crops.shape[0] * (pre.cpp * pre.cpp)
+            all_crops.append(crops); all_pool.append(pooled)
+        all_in.append(inp); all_tgt.append(tgt); all_w.append(w); seqlens.append(len(inp))
+    input_ids = np.concatenate(all_in); target_ids = np.concatenate(all_tgt); w_ids = np.concatenate(all_w)
+    pad = (-input_ids.shape[0]) % 16
+    if pad:
+        input_ids = np.concatenate([input_ids, np.full(pad, EOT_ID, np.int64)])
+        target_ids = np.concatenate([target_ids, np.zeros(pad, np.int64)])
+        w_ids = np.concatenate([w_ids, np.zeros(pad, np.float64)])
+        seqlens.append(pad)
+    cu = torch.tensor([0] + list(np.cumsum(seqlens)), dtype=torch.int32)
+    images = torch.from_numpy(np.concatenate(all_crops, 0)) if all_crops else torch.zeros(0)
+    pooled = torch.from_numpy(np.concatenate(all_pool, 0)) if all_pool else torch.zeros(0, 4).long()
+    return dict(input_seq=torch.from_numpy(input_ids).to(torch.int32),
+                target_seq=torch.from_numpy(target_ids).long(),
+                loss_mask=torch.from_numpy(w_ids).float(),   # float weights; forward does weighted mean
+                seqlens=cu, images=images, pooled_idx=pooled)
+
+
+def _train_iter(cfg: "TrainConfig", seed: int):
+    """A fresh train-example iterator for the configured source, seeded by `seed` (each prefetch worker
+    gets a distinct seed -> a distinct shuffle -> different data, so N workers don't duplicate work)."""
+    if cfg.mix_dir:
+        return iter_mix_examples(cfg.mix_dir, "train", seed)
     if cfg.synthetic:
-        return iter_synthetic_examples(cfg.seed + 1), iter_synthetic_examples(cfg.seed + 7)
+        return iter_synthetic_examples(seed)
     if cfg.data_dir:
-        return (iter_local_examples(cfg.data_dir, "train", cfg.seed + 1),
-                iter_local_examples(cfg.data_dir, "val", cfg.seed + 7))
+        return iter_local_examples(cfg.data_dir, "train", seed)
     if cfg.hf_dataset:
-        return (iter_hf_examples(cfg.hf_dataset, cfg.hf_train_split, cfg.seed + 1),
-                iter_hf_examples(cfg.hf_dataset, cfg.hf_val_split, cfg.seed + 7))
+        return iter_hf_examples(cfg.hf_dataset, cfg.hf_train_split, seed)
+    raise SystemExit("No data source: pass --data_dir, --hf_dataset <name>, or --synthetic.")
+
+
+def _val_iter(cfg: "TrainConfig"):
+    """Val-example iterator (rank-independent seed so every rank scores the identical held-out set).
+    Only the rolling hf/synthetic path uses this; --data_dir/--mix_dir build a fixed per-source set."""
+    s = cfg.seed + 7
+    if cfg.mix_dir:
+        return iter_mix_examples(cfg.mix_dir, "validation", s)
+    if cfg.synthetic:
+        return iter_synthetic_examples(s)
+    if cfg.data_dir:
+        return iter_local_examples(cfg.data_dir, "val", s)
+    if cfg.hf_dataset:
+        return iter_hf_examples(cfg.hf_dataset, cfg.hf_val_split, s)
     raise SystemExit("No data source: pass --data_dir, --hf_dataset <name>, or --synthetic.")
 
 
@@ -642,24 +869,64 @@ def build_optimizer(vgpt: VisionGPT, cfg: TrainConfig):
         {"params": list(vgpt.vit.parameters()), "lr": cfg.vit_lr, "base_lr": cfg.vit_lr},
         {"params": list(vgpt.gpt.parameters()), "lr": cfg.llm_lr, "base_lr": cfg.llm_lr},
     ]
+    # Drop params/groups that don't train (e.g. a frozen ViT) so AdamW allocates no optimizer state for them.
+    groups = [{**g, "params": [p for p in g["params"] if p.requires_grad]} for g in groups]
+    groups = [g for g in groups if g["params"]]
     return torch.optim.AdamW(groups, betas=(0.9, 0.95), weight_decay=cfg.weight_decay)
 
 
-def lr_scale(step: int, cfg: TrainConfig) -> float:
+def lr_scale(step: int, elapsed_min: float, cfg: TrainConfig) -> float:
     if step < cfg.warmup_steps:
         return (step + 1) / cfg.warmup_steps
-    frac = (step - cfg.warmup_steps) / max(cfg.max_steps - cfg.warmup_steps, 1)
+    # Anneal over WALLCLOCK for a --max_minutes run (so the cosine actually reaches its floor even though
+    # max_steps is just a high cap); fall back to step-fraction when there's no time budget.
+    if cfg.max_minutes > 0:
+        frac = elapsed_min / cfg.max_minutes
+    else:
+        frac = (step - cfg.warmup_steps) / max(cfg.max_steps - cfg.warmup_steps, 1)
     return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(frac, 1.0)))  # cosine to alpha_f=0.1
 
 
 # ===========================================================================
 # 8. Training loop
 # ===========================================================================
+class _Prefetcher:
+    """Overlap the CPU collate of upcoming train batches with GPU compute, across N worker threads.
+
+    The collate (PIL decode + multicrop preprocess + tiktoken) is dominated by C-level numpy/PIL/Rust ops
+    that release the GIL, so multiple threads genuinely parallelize it. Each worker owns its own data
+    iterator (distinct seed via iter_factory(w)) so there's no shared-iterator race, and all feed one
+    queue (order-agnostic for SGD). Workers never touch CUDA (H2D copy stays on the main thread).
+    DATA_WORKERS sets N; NO_PREFETCH=1 disables entirely.
+    """
+
+    def __init__(self, iter_factory, dbs, collate_cpu, n_workers=1):
+        self._dbs, self._collate = dbs, collate_cpu
+        self._q = queue.Queue(maxsize=2 * n_workers)
+        for w in range(n_workers):
+            it = iter_factory(w)
+            threading.Thread(target=self._worker, args=(it,), daemon=True).start()
+
+    def _worker(self, it):
+        try:
+            while True:
+                self._q.put(self._collate([next(it) for _ in range(self._dbs)]))
+        except Exception as e:  # forward to the consumer instead of dying silently
+            self._q.put(e)
+
+    def next(self):
+        item = self._q.get()
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
 def main():
     ap = argparse.ArgumentParser()
     for f in dataclasses.fields(TrainConfig):
         if isinstance(f.default, bool):
-            ap.add_argument(f"--{f.name}", action="store_true", default=f.default)
+            # BooleanOptionalAction -> both --flag and --no-flag, so default-True bools can be disabled.
+            ap.add_argument(f"--{f.name}", action=argparse.BooleanOptionalAction, default=f.default)
         else:
             ap.add_argument(f"--{f.name}", type=type(f.default), default=f.default)
     cfg = TrainConfig(**vars(ap.parse_args()))
@@ -673,7 +940,12 @@ def main():
         cands = sorted(glob.glob("logs/*/state_step*.pt"), key=os.path.getmtime)
         backbone = cands[-1] if cands else ""
         print(f"[backbone] auto -> {backbone or '(none found; random GPT)'}")
-    vgpt, _device, _world_size = build_backbone(backbone, vcfg)
+    vgpt, _, world_size = build_backbone(backbone, vcfg)
+    # build_backbone imported train_gpt, which set up the process group (under torchrun) and these:
+    from train_gpt import rank, master_process
+    is_dp = world_size > 1
+    if master_process:
+        print(f"[dp] world_size={world_size} rank={rank} effective_batch={cfg.device_batch_size * world_size}", flush=True)
 
     # Load pretrained SigLIP into the ViT (keys mirror the converted checkpoint from convert_siglip.py).
     if cfg.siglip and os.path.exists(cfg.siglip):
@@ -684,6 +956,21 @@ def main():
         print(f"[siglip] {cfg.siglip or '(none)'} not found: using randomly-initialized ViT (smoke only)")
     vgpt.vit.to(torch.bfloat16)
 
+    if cfg.freeze_vit:  # frozen SigLIP feature extractor: no grad/optimizer state, no backward through it
+        for p in vgpt.vit.parameters():
+            p.requires_grad_(False)
+        vgpt.freeze_vit = True
+        if master_process:
+            print("[freeze] ViT frozen (no backward); training connector + LLM only", flush=True)
+
+    # The ViT is ~75% of train FLOPs and was running eager (27 blocks dispatched in Python per step).
+    # Compile it in place (params/state_dict keys unchanged); dynamic=True since the crop count varies
+    # per batch. Set NO_COMPILE=1 to disable. Biggest single MFU lever measured for this trainer.
+    if not os.environ.get("NO_COMPILE"):
+        vgpt.vit.compile(dynamic=True)
+        if master_process:
+            print("[compile] vit compiled (dynamic)", flush=True)
+
     from train_gpt import ForwardScheduleConfig, get_bigram_hash
     # Full attention within each doc (windows >= seq_len); SFT sequences are short.
     sched = ForwardScheduleConfig(mtp_weights=None, ws_short=cfg.seq_len,
@@ -691,50 +978,220 @@ def main():
 
     pre = MulticropPreprocessor(vcfg)
     opt = build_optimizer(vgpt, cfg)
-    train_it, val_it = build_data_iters(cfg)
+    val_it = _val_iter(cfg)
+
+    # ---- MFU bookkeeping: per-stack param counts (used in the analytic 6*N*D estimate) ----
+    N_gpt = sum(p.numel() for p in vgpt.gpt.parameters())
+    N_vit = sum(p.numel() for p in vgpt.vit.parameters())
+    POOL = vcfg.pooling_h * vcfg.pooling_w        # ViT sees ~POOL x the pooled (<im_patch>) tokens
+    VIT_COEF = 2.0 if cfg.freeze_vit else 6.0     # frozen ViT is forward-only (2ND); else fwd+bwd (6ND)
+    PEAK_FLOPS = 989e12                            # H200 SXM bf16 tensor-core peak (no sparsity), per GPU
+    if master_process:
+        print(f"[mfu] params: gpt={N_gpt/1e6:.1f}M vit={N_vit/1e6:.1f}M ; peak={PEAK_FLOPS/1e12:.0f} TFLOP/s/gpu", flush=True)
+
+    # Split CPU collate (the ~40%-of-step image decode + multicrop, GIL-releasing) from the H2D copy so
+    # a background thread can overlap the next batch's collate with this batch's GPU compute (see _Prefetcher).
+    _CUDA_KEYS = ("input_seq", "target_seq", "seqlens", "bigram_input_seq", "images", "pooled_idx", "loss_mask")
+
+    def collate_cpu(examples):
+        b = (collate_mix(examples, cfg.seq_len, pre, vcfg) if cfg.mix_dir
+             else collate_packed(examples, cfg.seq_len, pre))
+        b["bigram_input_seq"] = get_bigram_hash(b["input_seq"])  # pins memory -> needs a CPU tensor
+        return b
+
+    def to_cuda(b):
+        return {k: b[k].cuda(non_blocking=True) for k in _CUDA_KEYS}
+
+    def to_batch(examples):                       # synchronous (val path)
+        return to_cuda(collate_cpu(examples))
 
     def next_batch(it):
-        b = collate_packed([next(it) for _ in range(cfg.device_batch_size)], cfg.seq_len, pre)
-        cpu_input = b["input_seq"]  # get_bigram_hash pins memory -> needs a CPU tensor
-        bigram_cpu = get_bigram_hash(cpu_input)
-        return dict(
-            input_seq=cpu_input.cuda(),
-            target_seq=b["target_seq"].cuda(),
-            seqlens=b["seqlens"].cuda(),
-            bigram_input_seq=bigram_cpu.cuda(),
-            images=b["images"].cuda(),
-            pooled_idx=b["pooled_idx"].cuda(),
-            loss_mask=b["loss_mask"].cuda(),
-        )
+        return to_batch([next(it) for _ in range(cfg.device_batch_size)])
+
+    # Fixed, per-source val set of ready-to-batch examples (comparable + low-variance); else rolling.
+    def _build_val_fixed():
+        if cfg.mix_dir:
+            rows = _load_mix_rows(cfg.mix_dir, "validation")
+            rng = np.random.RandomState(cfg.seed + 7)
+            return {s: [mix_row_to_example(rows[s][int(i)], cfg.mix_dir)
+                        for i in rng.permutation(len(rows[s]))[:cfg.val_examples_per_source]]
+                    for s in sorted(rows)}
+        if cfg.data_dir and not cfg.synthetic:
+            by = load_val_by_source(cfg.data_dir, cfg.val_examples_per_source, cfg.seed + 7)
+            return {s: [load_example_row(cfg.data_dir, r) for r in rs] for s, rs in by.items()}
+        return None
+    val_fixed = _build_val_fixed()
+
+    # Fixed held-out FineWeb text blocks -> LM loss, to watch the LLM's text ability during vision SFT.
+    def _build_text_val():
+        if cfg.text_val_blocks <= 0 or not master_process:   # only rank 0 ever scores text-val
+            return []
+        import glob
+        from pathlib import Path
+        from train_gpt import _load_data_shard
+        files = sorted(glob.glob(os.path.join(os.environ.get("DATA_PATH", "."), "data/text/fineweb10B/fineweb_val_*.bin")))
+        if not files:
+            return []
+        toks = _load_data_shard(Path(files[0])).to(torch.int64)   # uint16 -> int64 token ids
+        L = cfg.seq_len
+        blocks = [toks[i * L: i * L + L + 1] for i in range(cfg.text_val_blocks)]  # +1 for the target shift
+        return [b for b in blocks if b.numel() == L + 1]
+    text_blocks = _build_text_val()
+
+    def text_val():
+        """Mean next-token CE (nats/tok) of the GPT backbone on the fixed FineWeb blocks (text-only)."""
+        if not text_blocks:
+            return None
+        vgpt.gpt.embed.clear_pending()
+        losses = []
+        with torch.no_grad():
+            for blk in text_blocks:
+                inp, tgt = blk[:-1], blk[1:]
+                n = inp.numel()
+                pad = (-n) % 16
+                if pad:  # FA3 varlen needs total length % 16; pad tokens form their own doc, excluded below
+                    inp = torch.cat([inp, torch.full((pad,), EOT_ID, dtype=inp.dtype)])
+                    tgt = torch.cat([tgt, torch.zeros(pad, dtype=tgt.dtype)])
+                seqlens = [n] + ([pad] if pad else [])
+                cu = torch.tensor([0] + list(np.cumsum(seqlens)), dtype=torch.int32).cuda()
+                inp32 = inp.to(torch.int32)
+                lpt = vgpt.gpt(inp32.cuda(), tgt.cuda(), cu, get_bigram_hash(inp32).cuda(), sched)
+                losses.append(lpt[:n].mean().item())
+        return sum(losses) / len(losses)
 
     def validate():
+        """Returns (macro_avg_loss, {source: loss}). per_src is {} on the rolling (hf/synthetic) path."""
         vgpt.eval()
+        per_src = {}
         with torch.no_grad():
-            total = sum(vgpt(next_batch(val_it), sched).item() for _ in range(cfg.val_batches))
+            if val_fixed is not None:
+                for src, exs_all in val_fixed.items():
+                    losses, dbs = [], cfg.device_batch_size
+                    for i in range(0, len(exs_all), dbs):
+                        losses.append(vgpt(to_batch(exs_all[i:i + dbs]), sched).item())
+                    per_src[src] = sum(losses) / max(len(losses), 1)
+                macro = sum(per_src.values()) / max(len(per_src), 1)
+            else:
+                total = sum(vgpt(next_batch(val_it), sched).item() for _ in range(cfg.val_batches))
+                macro = total / max(cfg.val_batches, 1)
         vgpt.train()
-        return total / max(cfg.val_batches, 1)
+        return macro, per_src
 
+    def report_val(step):
+        macro, per_src = validate()
+        tv = text_val()
+        line = f"step:{step}/{cfg.max_steps} val_loss:{macro:.4f}"
+        if tv is not None:
+            line += f" text_val:{tv:.4f}"
+        if per_src:
+            line += "  [" + " ".join(f"{s}:{l:.3f}" for s, l in per_src.items()) + "]"
+        print(line, flush=True)
+        return macro, per_src, tv
+
+    mf = open(cfg.metrics_out, "w") if (cfg.metrics_out and master_process) else None
+    def log_metric(rec):
+        if mf is not None:
+            mf.write(json.dumps(rec) + "\n"); mf.flush()
+
+    diag = bool(os.environ.get("VISION_DIAG"))   # per-phase timing (data vs fwd+bwd vs opt) for MFU tuning
+    # Per-rank base seed so each DP rank draws a different shuffle (real data parallelism, not redundant work).
+    _base_seed = cfg.seed + 1 + rank * 1000
+    n_data_workers = 0 if (os.environ.get("NO_PREFETCH") or cfg.synthetic) else int(os.environ.get("DATA_WORKERS", "4"))
+    if n_data_workers > 0:
+        prefetch, train_it = _Prefetcher(lambda w: _train_iter(cfg, _base_seed + w * 97),
+                                         cfg.device_batch_size, collate_cpu, n_data_workers), None
+        if master_process:
+            print(f"[data] prefetch with {n_data_workers} worker threads", flush=True)
+    else:
+        prefetch, train_it = None, _train_iter(cfg, _base_seed)
     vgpt.train()
-    for step in range(cfg.max_steps + 1):
+    t0 = time.perf_counter()
+    tokens_cum = 0
+    mfu_hist, tps_hist = [], []
+    step = 0
+    while True:
+        elapsed = time.perf_counter() - t0
         for pg in opt.param_groups:
-            pg["lr"] = pg["base_lr"] * lr_scale(step, cfg)
+            pg["lr"] = pg["base_lr"] * lr_scale(step, elapsed / 60.0, cfg)
 
-        if step % cfg.val_every == 0 or step == cfg.max_steps:
-            print(f"step:{step}/{cfg.max_steps} val_loss:{validate():.4f}", flush=True)
-            if step == cfg.max_steps:
-                break
+        time_up = cfg.max_minutes > 0 and (elapsed / 60.0) >= cfg.max_minutes
+        if is_dp and cfg.max_minutes > 0:  # agree on the stop so no rank skips a collective the others hit
+            flag = torch.tensor([1 if time_up else 0], device="cuda")
+            dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+            time_up = bool(flag.item())
+        at_max = step >= cfg.max_steps
 
-        loss = vgpt(next_batch(train_it), sched)
+        if (step % cfg.val_every == 0) or at_max or time_up:
+            if master_process:
+                macro, per_src, tv = report_val(step)
+                log_metric({"event": "val", "step": step, "t_elapsed": elapsed,
+                            "val_macro": macro, "val_per_source": per_src, "text_val": tv})
+            if is_dp:
+                dist.barrier()
+        if at_max or time_up:
+            break
+
+        # ---- one train step (timed for throughput / MFU) ----
+        tstep = time.perf_counter()
+        batch = to_cuda(prefetch.next()) if prefetch is not None else next_batch(train_it)
+        T_gpt = int(batch["input_seq"].numel())                 # packed tokens through the GPT (this rank)
+        n_pool = int((batch["input_seq"] == IM_PATCH_ID).sum()) # pooled <im_patch> tokens
+        T_vit = POOL * n_pool                                    # ViT sees ~POOLx that many patch tokens
+        if diag:
+            torch.cuda.synchronize(); t_data = time.perf_counter()
+        loss = vgpt(batch, sched)
         loss.backward()
+        if is_dp:                                               # data-parallel: average grads across ranks
+            for p in vgpt.parameters():
+                if p.grad is not None:
+                    dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+        if diag:
+            torch.cuda.synchronize(); t_bwd = time.perf_counter()
         torch.nn.utils.clip_grad_norm_(vgpt.parameters(), cfg.grad_clip)
         opt.step()
         opt.zero_grad(set_to_none=True)
-        if step % 20 == 0:
-            print(f"step:{step}/{cfg.max_steps} train_loss:{loss.item():.4f}", flush=True)
+        torch.cuda.synchronize()
+        if diag and master_process and step % 10 == 0:
+            print(f"[diag] step:{step} data={ (t_data-tstep)*1e3:.0f}ms fwd+bwd={(t_bwd-t_data)*1e3:.0f}ms "
+                  f"opt={(time.perf_counter()-t_bwd)*1e3:.0f}ms total={(time.perf_counter()-tstep)*1e3:.0f}ms "
+                  f"T_gpt={T_gpt} T_vit={T_vit}", flush=True)
+        step_time = time.perf_counter() - tstep
 
-    os.makedirs(cfg.out_dir, exist_ok=True)
-    torch.save({"step": cfg.max_steps, "model": vgpt.state_dict()},
-               os.path.join(cfg.out_dir, "vision_sft_final.pt"))
+        tokens_cum += T_gpt * world_size
+        mfu = (6.0 * N_gpt * T_gpt + VIT_COEF * N_vit * T_vit) / step_time / PEAK_FLOPS  # per GPU
+        tps = T_gpt * world_size / step_time
+        if step >= 5:                                           # drop compile/warmup steps from the summary
+            mfu_hist.append(mfu); tps_hist.append(tps)
+        if step % 20 == 0:                                      # log cadence: all ranks reduce, rank 0 writes
+            gloss = loss.detach()
+            if is_dp:
+                dist.all_reduce(gloss, op=dist.ReduceOp.AVG)
+            if master_process:
+                gl = gloss.item()
+                print(f"step:{step}/{cfg.max_steps} train_loss:{gl:.4f} "
+                      f"mfu:{mfu*100:.1f}% tok/s:{tps:,.0f} step:{step_time*1e3:.0f}ms", flush=True)
+                log_metric({"event": "train", "step": step, "t_elapsed": elapsed,
+                            "lr": opt.param_groups[0]["lr"], "train_loss": gl,
+                            "step_time_s": step_time, "tokens_per_s": tps,
+                            "tokens_cum": tokens_cum, "mfu": mfu})
+        step += 1
+
+    if master_process:
+        os.makedirs(cfg.out_dir, exist_ok=True)
+        torch.save({"step": step, "model": vgpt.state_dict()},
+                   os.path.join(cfg.out_dir, "vision_sft_final.pt"))
+        if mfu_hist:
+            print(f"[mfu] trained_steps={step} median_mfu={statistics.median(mfu_hist)*100:.1f}% "
+                  f"mean_mfu={statistics.mean(mfu_hist)*100:.1f}% median_tok/s={statistics.median(tps_hist):,.0f} "
+                  f"tokens_total={tokens_cum:,} elapsed_min={(time.perf_counter()-t0)/60.0:.1f}", flush=True)
+            log_metric({"event": "summary", "trained_steps": step,
+                        "median_mfu": statistics.median(mfu_hist), "mean_mfu": statistics.mean(mfu_hist),
+                        "median_tokens_per_s": statistics.median(tps_hist), "tokens_total": tokens_cum,
+                        "elapsed_min": (time.perf_counter() - t0) / 60.0})
+        if mf is not None:
+            mf.close()
+    if is_dp:
+        dist.barrier()
 
 
 if __name__ == "__main__":

@@ -717,7 +717,7 @@ def hf_val_to_mixdir(repo: str, hf_split: str, out_dir: str):
     the local mix-dir layout (<source>__validation.jsonl + images/), so the existing per-source val path
     consumes it unchanged. Returns out_dir. Each HF config = one source; rows carry images + convos_json."""
     import json, datasets
-    from huggingface_hub import get_dataset_config_names
+    from datasets import get_dataset_config_names   # huggingface_hub 1.x dropped this; it lives in datasets
     datasets.disable_progress_bars()
     os.makedirs(out_dir, exist_ok=True)
     for source in get_dataset_config_names(repo):

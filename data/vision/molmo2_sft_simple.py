@@ -153,19 +153,22 @@ def main():
     ap.add_argument("--max_train", type=int, default=6000, help="cap examples per dataset (train)")
     ap.add_argument("--max_val", type=int, default=500, help="cap examples per dataset (val)")
     ap.add_argument("--only", nargs="+", default=None, help="source tags to include (default: all)")
+    ap.add_argument("--splits", nargs="+", default=["train", "val"], choices=["train", "val"],
+                    help="which splits to (re)build; default both. Use --splits val to refresh val.jsonl "
+                         "without truncating an existing train.jsonl.")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
-    writers = {k: open(os.path.join(args.out, f"{k}.jsonl"), "w") for k in ("train", "val")}
-    totals = {"train": 0, "val": 0}
+    writers = {k: open(os.path.join(args.out, f"{k}.jsonl"), "w") for k in args.splits}
+    totals = {k: 0 for k in args.splits}
     failed = []
     for repo, config, train_split, val_split, source in DATASETS:
         if args.only and source not in args.only:
             continue
         tag = f"{repo}" + (f":{config}" if config else "")
         print(f"[{tag}] ({source}) ingesting...", flush=True)
-        for split_key, hf_split, cap in (("train", train_split, args.max_train),
-                                         ("val", val_split, args.max_val)):
+        splits = [("train", train_split, args.max_train), ("val", val_split, args.max_val)]
+        for split_key, hf_split, cap in [s for s in splits if s[0] in args.splits]:
             try:
                 totals[split_key] += ingest_one(repo, config, hf_split, source, cap, args.out,
                                                  writers[split_key])
@@ -176,7 +179,7 @@ def main():
         w.close()
 
     print(f"\nDONE -> {args.out}")
-    for k in ("train", "val"):
+    for k in args.splits:
         p = os.path.join(args.out, f"{k}.jsonl")
         print(f"  {k}.jsonl: {sum(1 for _ in open(p))} rows (running total {totals[k]})")
     if failed:

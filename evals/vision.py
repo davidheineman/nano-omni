@@ -1,377 +1,171 @@
+#!/usr/bin/env python3
+"""Portable per-source held-out loss eval for models trained by vision/train_vision.py.
+
+Loads a VisionGPT checkpoint (the `{"step","model"}` dict saved by train_vision.py) and scores it against
+the shared vision validation set `davidheineman/vision-ppl` (built by data/vision/molmo2_sft_build_validation.py;
+HF config = source, HF split = "full" | "simple"), reporting the SAME per-source + macro cross-entropy the
+trainer prints in-loop. This is the standalone counterpart to train_vision's `--val_hf` validation: it reuses
+train_vision's own model + data code so the numbers are directly comparable.
+
+Everything heavy is imported from vision/train_vision.py (build_backbone, VisionGPT, the multicrop
+preprocessor, the mix-dir/val_hf loaders, collate_mix). Because build_backbone imports train_gpt, whose FA3
+attention kernel only initializes when RANK is in the env, this MUST run under torchrun on a CUDA + Hopper
+node with FA3 (same requirement as training). One GPU is plenty:
+
+    .venv/bin/torchrun --standalone --nproc_per_node=1 evals/vision.py \
+        results/vision/checkpoints_valhf/vision_sft_final.pt \
+        --val_hf davidheineman/vision-ppl --val_hf_split full --metrics_out results/vision/eval_valhf.jsonl
+
+See vision/run_holdout_loss.sbatch for the launcher. Render the metrics JSONL with vision/plot_training_curves.py.
+"""
 import argparse
-import hashlib
-import logging
+import json
 import os
 import sys
+import time
 
 import numpy as np
 
-# This script lives at speedrun/modded-nanogpt/evals/; the molmo2 reference repo is
-# a sibling of modded-nanogpt at speedrun/molmo2 (two levels up).
-_MOLMO2 = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "molmo2"))
-if _MOLMO2 not in sys.path:
-    sys.path.insert(0, _MOLMO2)
+# This file lives at modded-nanogpt/evals/. Put the repo root (train_gpt.py) and vision/ (train_vision.py)
+# on sys.path so we can import train_vision's reusable model+data helpers. build_backbone itself re-derives
+# the repo root from train_vision.py's own location, so importing it from here is safe.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+_VISION = os.path.join(_ROOT, "vision")
+for _p in (_ROOT, _VISION):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-log = logging.getLogger("vision_eval")
+import torch
+import train_vision as tv   # noqa: E402  (module-level helpers; CPU-safe to import, no train_gpt yet)
 
-HOLDOUT_SEED = 71237
-DEFAULT_VAL_FRAC = 0.02
-
-
-# ── per-dataset holdout ─────────────────────────────────────────────────────
-def _stable_seed(name):
-    h = hashlib.sha256(name.encode()).hexdigest()
-    return (HOLDOUT_SEED + int(h[:8], 16)) % (2**31)
+# The 1-D packed tensors VisionGPT.forward consumes (mirrors train_vision's _CUDA_KEYS, line 1029).
+_CUDA_KEYS = ("input_seq", "target_seq", "seqlens", "bigram_input_seq", "images", "pooled_idx", "loss_mask")
 
 
-class HoldoutView:
-    """Wrap a molmo2 Dataset, exposing only a deterministic train/val index shard.
+def _fit_state_dict(model, sd):
+    """Dim-0 slice the checkpoint tensors to the model's shapes (mirrors build_backbone, train_vision.py:497-509).
 
-    Satisfies the Dataset interface used by the dataloader: __len__ + get(item, rng).
-    The val shard is a fixed seeded fraction; training would use which="train" with
-    the SAME seed/frac to keep the split disjoint. (Against an already-fully-trained
-    checkpoint the shard is in-distribution, not uncontaminated — see README note.)
+    qk_bank/vo_bank are padded to a multiple of world_size at save time; an 8-GPU checkpoint (64/24) loaded
+    into a 1-GPU eval model (true 60/20) needs the leading dim sliced. The forward only reads the first
+    num_qk_groups / num_attn_layers*2 rows, so the slice is exact.
     """
-
-    def __init__(self, base, name, which, val_frac):
-        self.base = base
-        n = len(base)
-        perm = np.random.RandomState(_stable_seed(name)).permutation(n)
-        n_val = max(1, int(round(n * val_frac)))
-        val = set(perm[:n_val].tolist())
-        want_val = which == "val"
-        self.idxs = [i for i in range(n) if (i in val) == want_val]
-        if not self.idxs:  # tiny dataset: don't return an empty shard
-            self.idxs = list(range(n))
-
-    def __len__(self):
-        return len(self.idxs)
-
-    def get(self, item, rng):
-        return self.base.get(self.idxs[item], rng)
-
-    def __getitem__(self, item):
-        return self.get(item, np.random)
-
-    def __iter__(self):
-        for i in range(len(self)):
-            yield self[i]
+    msd = model.state_dict()
+    out = {}
+    for k, v in sd.items():
+        mv = msd.get(k)
+        if mv is None or v.shape == mv.shape:
+            out[k] = v
+        elif v.dim() == mv.dim() and v.shape[1:] == mv.shape[1:] and v.shape[0] >= mv.shape[0]:
+            out[k] = v[: mv.shape[0]]
+            print(f"[ckpt] sliced {k}: {tuple(v.shape)} -> {tuple(mv.shape)}", flush=True)
+        else:
+            print(f"[ckpt] skip shape-mismatch {k}: ckpt {tuple(v.shape)} vs model {tuple(mv.shape)}", flush=True)
+    return out
 
 
-_SKIPS = [0]
+def build_val_fixed(val_hf, val_hf_split, out_dir, per_source, seed, master_process, is_dp):
+    """Reconstruct the shared val set into a mix-dir layout and return {source: [ready-to-collate example]}.
 
-
-def install_skip_missing(max_retries=64):
-    """Make the loader resilient to examples whose media isn't on disk (partial
-    coverage). Monkeypatches DeterministicDataset.get to resample a different index
-    on any per-example failure. On the real cluster (full corpus) this never fires;
-    the skip count is logged so partial-coverage runs stay honest."""
-    import olmo.data.dataset as dsmod
-    orig = dsmod.DeterministicDataset.get
-
-    def safe_get(self, idx, epoch=0):
-        n = len(self)
-        for k in range(min(n, max_retries)):
-            try:
-                return orig(self, (idx + k * 7919) % n, epoch)
-            except Exception:
-                _SKIPS[0] += 1
-        return orig(self, idx, epoch)  # give up -> let it raise
-
-    dsmod.DeterministicDataset.get = safe_get
-
-
-def install_holdout(which="val", val_frac=DEFAULT_VAL_FRAC):
-    """Monkeypatch get_dataset_by_name so every mixture dataset is a holdout shard.
-
-    Patches the name bound in olmo.data.data_loader (imported by-value at data_loader.py:17,
-    which is the binding used at dataloader-build time) and the source module.
+    `val_hf` is either a local mix-dir (used as-is) or an HF repo id (downloaded + reconstructed via
+    train_vision.hf_val_to_mixdir -- the exact code the trainer's --val_hf path uses). Sampling is the fixed,
+    deterministic per-source subset train_vision.py:1058-1063 builds, so points are comparable run-to-run.
     """
-    import olmo.data.data_loader as dl
-    import olmo.data.get_dataset as gd
-    orig = gd.get_dataset_by_name
-
-    def patched(dataset_name, split):
-        return HoldoutView(orig(dataset_name, split), dataset_name, which, val_frac)
-
-    dl.get_dataset_by_name = patched
-    gd.get_dataset_by_name = patched
-    log.info(f"holdout installed: which={which} val_frac={val_frac}")
-    return orig
-
-
-# ── model config (training preprocessing) ───────────────────────────────────
-def training_model_cfg(checkpoint):
-    """Build the SFT model config. With a checkpoint, reuse sft.py get_model()
-    verbatim (exact training preprocessor). Without one (--dry-run), build a
-    standalone config carrying the same preprocessing knobs so the data pipeline
-    matches, minus weights."""
-    if checkpoint:
-        from launch_scripts.sft import get_model
-        from olmo.util import select_checkpoint
-        return get_model(select_checkpoint(checkpoint), "video")
-
-    # standalone: mirror get_model()'s preprocessing settings without loading weights
-    from olmo.model_configs import SIGLIP2_VISION_BACKBONE
-    from olmo.models.molmo2.molmo2 import Molmo2Config
-    from olmo.models.molmo2.molmo2_preprocessor import Molmo2PreprocessorConfig
-    from olmo.nn.llm import LlmConfig
-    from olmo.nn.vision_backbone import MolmoVisionBackboneConfig
-    from olmo.preprocessing.data_formatter import DataFormatter
-    from olmo.preprocessing.multicrop_preprocessor import MultiCropConfig
-    from olmo.preprocessing.video_preprocessor import VideoPreprocessorConfig
-    from olmo.tokenizer import TokenizerConfig
-
-    formatter = DataFormatter(
-        prompt_templates="uber_model_v2", message_format="qwen3",
-        system_prompt="demo_or_style_v2", pointing_format="html-v2",
-    )
-    formatter.p_multi_point_all_image = 0.5
-    formatter.p_choice_content_in_mc = 1.0
-    cfg = Molmo2Config(
-        llm=LlmConfig(tokenizer=TokenizerConfig("Qwen/Qwen2-7B"), vocab_size=152064),
-        vision_backbone=MolmoVisionBackboneConfig(vit=SIGLIP2_VISION_BACKBONE),
-        data_formatter=formatter,
-        mm_preprocessor=Molmo2PreprocessorConfig(
-            video=VideoPreprocessorConfig(
-                pooling_h=3, pooling_w=3, time_mode="per-frame-compact", max_frames=128,
-                loading_method="torchcodec_exact", time_sampling=True,
-                frame_sample_mode="uniform_last_frame", max_fps=[2], max_subtitle_tokens=None,
-            ),
-            image=MultiCropConfig(max_crops=12, max_images=5, max_multi_image_crops=8),
-        ),
-    )
-    # match the SFT loss-token weighting (this is what makes loss_masks non-binary)
-    cfg.mm_preprocessor.loss_token_weighting = "root_subsegments_root_tokens"
-    cfg.llm.max_sequence_length = 16384
-    return cfg
-
-
-# ── mixture: real weights + availability filtering ──────────────────────────
-def debug_mixture():
-    """Tiny CPU-validatable mixture over cached datasets, with a real message weight
-    on the caption-like split so loss_masks come out non-binary."""
-    from olmo.data.data_loader import KwargsMixture, WeightedDataset
-    from olmo.preprocessing.text_preprocessor import MessageWeight
-    cap_w = MessageWeight(weight=0.1, root_length=False, root_subsegments=False)
-    return [
-        KwargsMixture(0.5, [WeightedDataset("chart_qa")], "image_academic"),
-        KwargsMixture(0.5, [WeightedDataset("cosyn_chart_exp", message_weight=cap_w)], "demo"),
-    ]
-
-
-def filtered_mixture(name, split, model_cfg):
-    """Return (mixture, report). Drops datasets whose media isn't on disk (probed by
-    actually preprocessing a sample example, so datasets that construct but have no
-    readable media are dropped too) and renormalizes group rates, tracking dropped
-    weight for honest coverage."""
-    from launch_scripts.sft import get_training_mixture
-    from olmo.data.dataset import DeterministicDataset
-    import olmo.data.get_dataset as gd
-
-    preproc = model_cfg.build_preprocessor(is_training=False, for_inference=False, include_image=True)
-
-    def _usable(dataset_name):
-        ds = gd.get_dataset_by_name(dataset_name, split)  # holdout-wrapped
-        if len(ds) == 0:
-            raise ValueError("empty shard")
-        DeterministicDataset(ds, preproc, seed=0).get(0)   # must preprocess a real example
-        return True
-
-    groups = get_training_mixture(name)
-    total_rate = sum(g.rate for g in groups)
-    kept_groups, report = [], []
-    for g in groups:
-        kept_ds, dropped_ds = [], []
-        for wd in g.datasets:
-            try:
-                _usable(wd.dataset_name)
-                kept_ds.append(wd)
-            except Exception as e:
-                dropped_ds.append((wd.dataset_name, repr(e)[:60]))
-        frac = g.rate / total_rate
-        report.append(dict(group=g.name, rate=frac, kept=[w.dataset_name for w in kept_ds],
-                           dropped=dropped_ds))
-        if kept_ds:
-            g.datasets = kept_ds
-            kept_groups.append(g)
-
-    kept_total = sum(g.rate for g in kept_groups)
-    for g in kept_groups:  # renormalize surviving group rates to sum to 1
-        g.rate = g.rate / kept_total
-    covered = kept_total / total_rate
-    return kept_groups, report, covered
-
-
-def print_coverage(report, covered):
-    log.info("=" * 64)
-    log.info(f"MIXTURE COVERAGE: {covered*100:.1f}% of SFT objective by weight")
-    for r in report:
-        status = "KEPT" if r["kept"] else "DROPPED"
-        log.info(f"  [{status}] {r['group']:16s} weight={r['rate']*100:5.1f}%  "
-                 f"kept={len(r['kept'])} dropped={len(r['dropped'])}")
-        for dn, err in r["dropped"][:4]:
-            log.info(f"       - drop {dn}: {err}")
-    log.info("=" * 64)
-
-
-# ── build the mixture dataloader ────────────────────────────────────────────
-def build_mesh(device_type):
-    """World mesh with the dim names molmo2's packer/loader expect (incl. cp)."""
-    from olmo.dist_util import build_world_mesh
-    from olmo.train.trainer_config import ParallelismConfig
-    p = ParallelismConfig()
-    return build_world_mesh(
-        dp=p.data_parallel_config,
-        cp=p.context_parallel_config,
-        tp=p.tensor_parallel_config,
-        device_type=device_type,
-    )
-
-
-def build_loader(mixture, model_cfg, args, mesh, global_batch_size):
-    from olmo.data.data_loader import DataLoaderConfig
-    from olmo.data.dynamic_packer import PackingConfig
-    data = DataLoaderConfig(
-        kwargs_mixture=mixture,
-        split="train",              # holdout monkeypatch carves the val shard out of it
-        shuffle=True, drop_last=True,
-        sequence_length=args.seq_len, max_text_seq_len=None,
-        num_workers=args.num_workers, pad="to_max", pin_memory=False,
-        prefetch_factor=(args.prefetch_factor if args.num_workers else None),
-        seed=50189,
-        packing=PackingConfig(buffer_size=48, image_weight=30, shortcut_max_len_images=False),
-    )
-    return data.build_train_dataloader(model_config=model_cfg, mesh=mesh,
-                                       global_batch_size=global_batch_size)
-
-
-# ── dry-run: validate weights / packing / holdout on CPU (no model) ─────────
-def dry_run(mixture, model_cfg, args):
-    import torch.distributed as tdist
-
-    if not tdist.is_initialized():
-        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-        os.environ.setdefault("MASTER_PORT", "29591")
-        os.environ.setdefault("RANK", "0"); os.environ.setdefault("WORLD_SIZE", "1")
-        os.environ.setdefault("LOCAL_RANK", "0")
-        tdist.init_process_group(backend="gloo", world_size=1, rank=0)
-    mesh = build_mesh("cpu")
-
-    loader = build_loader(mixture, model_cfg, args, mesh, global_batch_size=1)
-    log.info("iterating loader (CPU, no model)…")
-
-    saw_nonbinary = False
-    max_subsegs = 0
-    n_batches = 0
-    for batch in loader:
-        n_batches += 1
-        lm = batch["loss_masks"]
-        lm = lm.numpy() if hasattr(lm, "numpy") else np.asarray(lm)
-        pos = lm[lm > 0]
-        if pos.size and np.any(np.abs(pos - 1.0) > 1e-6):
-            saw_nonbinary = True
-        # packing groups multiple examples per sequence -> multiple subsegment ids
-        if "subsegment_ids" in batch:
-            ss = batch["subsegment_ids"]
-            ss = ss.numpy() if hasattr(ss, "numpy") else np.asarray(ss)
-            uniq = np.unique(ss[ss >= 0])
-            max_subsegs = max(max_subsegs, len(uniq))
-        if n_batches <= 3:
-            log.info(f"  batch {n_batches}: loss_masks>0={int((lm>0).sum())} "
-                     f"min_pos={pos.min():.4f} max_pos={pos.max():.4f} "
-                     f"(non-binary weights => message-weighting active)")
-        if n_batches >= args.max_batches:
-            break
-
-    log.info("-" * 64)
-    log.info(f"VALIDATION: batches={n_batches}")
-    log.info(f"  #3 message-weighted loss_masks are non-binary: {saw_nonbinary}")
-    log.info(f"  #3 packing groups up to {max_subsegs} examples/sequence: {max_subsegs > 1}")
-    log.info("  #1 mixture rates + #4 training preprocessor: applied via build_train_dataloader")
-    log.info(f"  skipped {_SKIPS[0]} examples with missing media (partial-coverage runs only)")
-    log.info("-" * 64)
-    if tdist.is_initialized():
-        tdist.destroy_process_group()
-    return saw_nonbinary
-
-
-# ── full run: load checkpoint, run LossDatasetEvaluator over the mixture ────
-def full_run(checkpoint, mixture, model_cfg, args):
-    import torch
-    from olmo.checkpoint import load_model_state
-    from olmo.eval.loss_evaluator import LossDatasetEvaluator, LossMetrics
-    from olmo.util import select_checkpoint, resource_path
-    from olmo.torch_util import get_world_size
-
-    device = torch.device("cuda")
-    ckpt_dir = select_checkpoint(checkpoint)
-    from olmo.models.molmo.molmo import MolmoConfig
-    loaded_cfg = MolmoConfig.load(resource_path(ckpt_dir, "config.yaml"), key="model",
-                                  validate_paths=False)
-    # keep the checkpoint's architecture, but use our training preprocessing knobs
-    loaded_cfg.mm_preprocessor = model_cfg.mm_preprocessor
-    loaded_cfg.data_formatter = model_cfg.data_formatter
-    loaded_cfg.llm.max_sequence_length = args.seq_len
-
-    with torch.device("meta"):
-        model = loaded_cfg.build_model()
-    model.to_empty(device=device)
-    load_model_state(ckpt_dir, model)
-    model.eval()
-
-    mesh = build_mesh("cuda")
-    loader = build_loader(mixture, loaded_cfg, args, mesh,
-                          global_batch_size=args.device_batch_size * get_world_size())
-    num_batches = max(1, args.max_examples // (args.device_batch_size * get_world_size()))
-    evaluator = LossDatasetEvaluator(
-        label="holdout", eval_loader=loader, evaluator=LossMetrics(device),
-        num_batches=num_batches, response_logits_only=True,
-    )
-    metrics = evaluator.run(model, device, autocast_precision=torch.bfloat16, pbar=True)
-    log.info("=" * 64)
-    log.info(f"HELD-OUT SFT LOSS  CrossEntropyLoss={metrics.get('CrossEntropyLoss'):.4f}  "
-             f"Accuracy={metrics.get('Accuracy'):.4f}")
-    log.info("=" * 64)
-    return metrics
+    if os.path.isdir(val_hf):
+        val_mix_dir = val_hf
+    else:
+        val_mix_dir = os.path.join(out_dir, "_val_hf")
+        if master_process:
+            tv.hf_val_to_mixdir(val_hf, val_hf_split, val_mix_dir)
+        if is_dp:
+            import torch.distributed as dist
+            dist.barrier()
+    rows = tv._load_mix_rows(val_mix_dir, "validation")
+    rng = np.random.RandomState(seed + 7)
+    return {s: [tv.mix_row_to_example(rows[s][int(i)], val_mix_dir)
+                for i in rng.permutation(len(rows[s]))[:per_source]]
+            for s in sorted(rows)}
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     ap = argparse.ArgumentParser()
-    ap.add_argument("checkpoint", nargs="?", default=None, help="Molmo2 checkpoint dir (omit for --dry-run)")
-    ap.add_argument("--mixture", default="molmo2", help='"molmo2" (real) or "debug" (cached CPU test)')
-    ap.add_argument("--dry-run", action="store_true", help="validate the data pipeline, no model/GPU")
-    ap.add_argument("--which", default="val", choices=["val", "train"], help="holdout shard to eval")
-    ap.add_argument("--val-frac", type=float, default=DEFAULT_VAL_FRAC)
-    ap.add_argument("--seq-len", type=int, default=16384)
-    ap.add_argument("--device-batch-size", type=int, default=2)
-    ap.add_argument("--max-examples", type=int, default=20000, help="approx examples for the full run")
-    ap.add_argument("--max-batches", type=int, default=6, help="batches for --dry-run")
-    ap.add_argument("--num-workers", type=int, default=0)
-    ap.add_argument("--prefetch-factor", type=int, default=4)
+    ap.add_argument("checkpoint", help="VisionGPT checkpoint from train_vision.py (the {'step','model'} .pt)")
+    ap.add_argument("--val_hf", default="davidheineman/vision-ppl",
+                    help="HF repo id OR a local reconstructed mix-dir to validate against")
+    ap.add_argument("--val_hf_split", default="full", choices=["full", "simple"])
+    ap.add_argument("--val_examples_per_source", type=int, default=128)
+    ap.add_argument("--seq_len", type=int, default=2048)
+    ap.add_argument("--device_batch_size", type=int, default=6)
+    ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--out_dir", default="results/vision/_eval", help="scratch dir for the reconstructed val set")
+    ap.add_argument("--metrics_out", default="", help="optional JSONL: one {'event':'val',...} record")
     args = ap.parse_args()
 
-    install_holdout(which=args.which, val_frac=args.val_frac)
-    install_skip_missing()
-    model_cfg = training_model_cfg(args.checkpoint)
+    vcfg = tv.VisionConfig()
+    torch.manual_seed(args.seed)
 
-    if args.mixture == "debug":
-        mixture = debug_mixture()
-        log.info("using debug mixture (chart_qa + cosyn_chart_exp, cached)")
-    else:
-        mixture, report, covered = filtered_mixture(args.mixture, "train", model_cfg)
-        print_coverage(report, covered)
-        if not mixture:
-            raise SystemExit("no mixture datasets available on disk — nothing to evaluate")
+    # Build VisionGPT with an EMPTY backbone (random GPT) -- the SFT checkpoint's "model" dict already carries
+    # trained gpt.*/vit.*/connector.*. build_backbone imports train_gpt (FA3 init under torchrun) + wraps the
+    # image-injecting embed, so the state_dict keys line up for a strict load.
+    vgpt, _, world_size = tv.build_backbone("", vcfg)
+    from train_gpt import rank, master_process, ForwardScheduleConfig, get_bigram_hash
+    is_dp = world_size > 1
 
-    if args.dry_run or not args.checkpoint:
-        ok = dry_run(mixture, model_cfg, args)
-        if not ok:
-            log.warning("loss_masks looked binary — message-weighting may not be active")
-    else:
-        full_run(args.checkpoint, mixture, model_cfg, args)
+    # Mirror train_vision main()'s dtype setup so the loaded params land in the exact precision training used:
+    # cast the ViT to bf16 BEFORE loading (else bf16 weights up-cast into fp32 params), then load strict.
+    vgpt.vit.to(torch.bfloat16)
+    sd = torch.load(args.checkpoint, map_location="cpu", weights_only=False)["model"]
+    sd = _fit_state_dict(vgpt, sd)   # slice 8-GPU-padded banks down to this run's world_size
+    missing, unexpected = vgpt.load_state_dict(sd, strict=False)
+    if master_process:
+        print(f"[ckpt] {args.checkpoint}: loaded {len(sd)} tensors; "
+              f"missing={len(missing)} unexpected={len(unexpected)}", flush=True)
+    vgpt.freeze_vit = True   # eval: never backprop through the ViT
+    vgpt.eval()
+
+    sched = ForwardScheduleConfig(mtp_weights=None, ws_short=args.seq_len,
+                                  ws_long=args.seq_len, train_max_seq_len=args.seq_len)
+    pre = tv.MulticropPreprocessor(vcfg)
+
+    def to_batch(examples):
+        """CPU collate (train_vision.collate_mix) + bigram hash, then H2D copy -- mirrors collate_cpu/to_cuda."""
+        b = tv.collate_mix(examples, args.seq_len, pre, vcfg)
+        b["bigram_input_seq"] = get_bigram_hash(b["input_seq"])   # CPU tensor (pins memory)
+        return {k: b[k].cuda(non_blocking=True) for k in _CUDA_KEYS}
+
+    val_fixed = build_val_fixed(args.val_hf, args.val_hf_split, args.out_dir,
+                                args.val_examples_per_source, args.seed, master_process, is_dp)
+    if master_process:
+        print(f"[val] {args.val_hf} [{args.val_hf_split}]: {len(val_fixed)} sources, "
+              f"{sum(len(v) for v in val_fixed.values())} examples", flush=True)
+
+    # Per-source weighted-mean CE (VisionGPT.forward reduces the float loss_mask as a weighted mean -> exactly
+    # the per-source loss the trainer reports). Macro = unweighted mean across sources.
+    t0 = time.perf_counter()
+    per_src, dbs = {}, args.device_batch_size
+    with torch.no_grad():
+        for src, exs in val_fixed.items():
+            losses = [vgpt(to_batch(exs[i:i + dbs]), sched).item() for i in range(0, len(exs), dbs)]
+            per_src[src] = sum(losses) / max(len(losses), 1)
+    macro = sum(per_src.values()) / max(len(per_src), 1)
+
+    if master_process:
+        print("=" * 64, flush=True)
+        for s in sorted(per_src):
+            print(f"  {s:48s} {per_src[s]:.4f}", flush=True)
+        print("-" * 64, flush=True)
+        print(f"  {'MACRO (per-source mean)':48s} {macro:.4f}   "
+              f"({len(per_src)} sources, {time.perf_counter()-t0:.1f}s)", flush=True)
+        print("=" * 64, flush=True)
+        if args.metrics_out:
+            os.makedirs(os.path.dirname(args.metrics_out) or ".", exist_ok=True)
+            with open(args.metrics_out, "w") as f:
+                f.write(json.dumps({"event": "val", "step": 0, "val_macro": macro,
+                                    "val_per_source": per_src, "text_val": None}) + "\n")
+            print(f"wrote {args.metrics_out}", flush=True)
 
 
 if __name__ == "__main__":
     main()
+    sys.stdout.flush(); sys.stderr.flush()
+    os._exit(0)   # skip any lingering dataloader/FA3 finalizer hang

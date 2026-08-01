@@ -22,9 +22,10 @@ Output (mirrors what vision/train_vision.py consumes):
 The trainer reproduces Molmo 2's sampler from mixture.json (per-dataset size=sqrt(len), normalize within
 group x group weight, global normalize) and the `root_subsegments_root_tokens` loss weighting.
 
-Run (host conda, HF reachable) -- use the launcher, which sets env + skips PixMo + is resumable:
-    bash data/vision/run_full_materialize.sh          # re-run to resume; --resume skips finished datasets
-Direct:  MOLMO_DATA_DIR=/storage/home/dhei/molmo_data python data/vision/molmo2_sft_full.py --resume
+Run (host conda -- /opt/conda/bin/python -- where `import olmo` works + HF is reachable; see README.md):
+    MOLMO_DATA_DIR=/storage/home/dhei/molmo_data python data/vision/molmo2_sft_full.py --resume --skip <pixmo...>
+`--resume` skips finished datasets; re-run to continue. `stage_manual_pull()` auto-wires the
+manually-pulled datasets (doc_qa/info_qa/dv_qa/figure_qa) from data/vision/molmo2_manual_pull/.
 Smoke:  ... --only chart_qa_weighted cosyn_point --max_train 20 --max_val 8 --smoke
 --rebuild_mixture_only re(builds) mixture.json from whatever <source>__train.jsonl are already on disk.
 """
@@ -49,16 +50,21 @@ MIXTURE = {
     "image_academic": {"weight": 0.25, "datasets": [
         ("coco_2014_vqa_multi", None, 1.0), ("text_vqa", None, 1.0), ("okvqa", None, 1.0),
         ("chart_qa_weighted", None, 1.0),
-        # ai2_diagram_v2_mix_transparent DROPPED: upstream ai2-website.s3.amazonaws.com/data/ai2d-all.zip
-        # is dead (404). No auto mirror; would need a manual AI2D pull (see DATA_SOURCES.md).
+        # RRC datasets: manually pulled + staged into $DATA_HOME by molmo2_manual_pull/stage.sh.
+        ("doc_qa", None, 1.0), ("info_qa", None, 1.0),
+        # ai2_diagram_v2_mix_transparent PENDING: upstream ai2-website.s3.amazonaws.com/data/ai2d-all.zip
+        # is 404 and the images weren't pulled; re-add here once AI2D is in molmo2_manual_pull + staged.
         ("a_okvqa_mc", None, 1.0), ("a_okvqa_da", None, 1.0), ("science_qa_img", None, 1.0),
-        ("tabwmp_da", None, 1.0), ("tally_qa", None, 1.0),
+        ("tabwmp_da", None, 1.0),
+        # st_qa PENDING (rrc.cvc.uab.es/?ch=11 not pulled yet; stage.sh handles stvqa_qas.zip when present).
+        ("tally_qa", None, 1.0),
         ("mantis_instruct_llava_665k_multi_multi_only", None, 1.0),
         ("mantis_instruct_nlvr2_multi_only", None, 1.0),
         ("mantis_instruct_spot-the-diff_multi_only", None, 1.0),
-        # dv_qa / figure_qa / plot_qa DROPPED: their olmo builders fetch from dead/quota'd external
-        # hosts (Google Drive `drive.usercontent.google.com` for dv/plot, `download.microsoft.com`
-        # for figure) -> FileNotFoundError. Synthetic-chart QA is already covered by CoSyn + ChartQA.
+        # dv_qa / figure_qa: manually pulled; olmo builders read the staged archives via the
+        # MOLMO_MANUAL_PULL env fallback (Google-Drive / download.microsoft.com sources are dead).
+        ("dv_qa", 10000, 1.0), ("figure_qa", 10000, 1.0),
+        # plot_qa PENDING (Google-Drive download still in progress; add ("plot_qa", 20000, 1.0) once staged).
         ("cosyn_chart_exp", None, 1.0), ("cosyn_chemical_exp", None, 1.0), ("cosyn_diagram_exp", None, 1.0),
         ("cosyn_document", None, 1.0), ("cosyn_math_exp", None, 1.0), ("cosyn_music_exp", None, 1.0),
         ("cosyn_table_exp", None, 1.0),
@@ -209,18 +215,32 @@ def build_mixture_json(out_dir, sizes):
     for gname, g in MIXTURE.items():
         entries = []
         for name, cap, mw in g["datasets"]:
-            src = name
-            train_path = os.path.join(out_dir, f"{src}__train.jsonl")
-            n_train = _jsonl_count(train_path)
+            n_train = _jsonl_count(os.path.join(out_dir, f"{name}__train.jsonl"))
             if n_train == 0:
                 continue
-            size = float(sizes.get(src, n_train))
-            entries.append({"name": name, "source": src, "size": size, "message_weight": mw})
+            entries.append({"name": name, "source": name,
+                            "size": float(sizes.get(name, n_train)), "message_weight": mw})
         if entries:
             mixture["groups"][gname] = {"weight": g["weight"], "datasets": entries}
     with open(os.path.join(out_dir, "mixture.json"), "w") as f:
         json.dump(mixture, f, indent=2)
     return mixture
+
+
+def stage_manual_pull():
+    """Point olmo's (patched) dataset builders at the manually-pulled archives and extract them into
+    the on-disk layout olmo expects. Sets MOLMO_MANUAL_PULL (so in-process builders see it) and runs
+    the idempotent molmo2_manual_pull/stage.sh. No-op if that dir/script is absent."""
+    manual = os.environ.get("MOLMO_MANUAL_PULL") or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                 "molmo2_manual_pull")
+    if not os.path.isdir(manual):
+        return
+    os.environ["MOLMO_MANUAL_PULL"] = os.path.abspath(manual)
+    stage_sh = os.path.join(manual, "stage.sh")
+    if os.path.exists(stage_sh):
+        import subprocess
+        print(f"[stage] {stage_sh}", flush=True)
+        subprocess.run(["bash", stage_sh], check=False)
 
 
 def main():
@@ -236,12 +256,18 @@ def main():
     ap.add_argument("--seed", type=int, default=90218)
     args = ap.parse_args()
 
+    # Allow --skip "a b c" (one quoted, whitespace/comma-separated string) as well as --skip a b c.
+    if args.skip and len(args.skip) == 1 and (" " in args.skip[0] or "," in args.skip[0]):
+        args.skip = args.skip[0].replace(",", " ").split()
+
     os.makedirs(args.out, exist_ok=True)
     sizes = _load_sizes(args.out)
     if args.rebuild_mixture_only:
         m = build_mixture_json(args.out, sizes)
         print(f"Rebuilt mixture.json -> groups={ {g: len(v['datasets']) for g, v in m['groups'].items()} }")
         return
+
+    stage_manual_pull()   # extract + wire the manually-pulled datasets (doc_qa/info_qa/dv_qa/figure_qa)
 
     # (canonical output split, olmo load-split candidates, cap, seed offset). Val naming is not uniform:
     # most datasets take "validation", but OkVqa/AOkVqa reject it (config is "val") and a few only ship

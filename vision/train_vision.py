@@ -101,6 +101,10 @@ class TrainConfig:
     seed: int = 90218
     max_minutes: float = 0.0      # wallclock training budget (0 = disabled; stop at max_steps instead)
     metrics_out: str = ""         # JSONL metrics log (train_loss / per-source val / MFU / tokens_per_s); rank-0 only
+    val_hf: str = ""              # HF repo built by data/vision/molmo2_sft_build_validation.py; pull VAL from
+                                  # there (per-source, so the curve uses the shared portable set). Overrides
+                                  # local val. Reconstructed to a mix-dir layout -> same per-source val path.
+    val_hf_split: str = "full"    # which split of --val_hf to validate on ("full" or "simple")
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +712,37 @@ def _load_mix_rows(mix_dir: str, split: str):
     return out
 
 
+def hf_val_to_mixdir(repo: str, hf_split: str, out_dir: str):
+    """Download the portable val set (data/vision/molmo2_sft_build_validation.py) and reconstruct it into
+    the local mix-dir layout (<source>__validation.jsonl + images/), so the existing per-source val path
+    consumes it unchanged. Returns out_dir. Each HF config = one source; rows carry images + convos_json."""
+    import json, datasets
+    from huggingface_hub import get_dataset_config_names
+    datasets.disable_progress_bars()
+    os.makedirs(out_dir, exist_ok=True)
+    for source in get_dataset_config_names(repo):
+        try:
+            ds = datasets.load_dataset(repo, source, split=hf_split)
+        except Exception:
+            continue  # this source has no rows for the requested split
+        img_dir = os.path.join(out_dir, "images", source); os.makedirs(img_dir, exist_ok=True)
+        rows, img_i = [], 0
+        for ex in ds:
+            rels = []
+            for im in ex["images"]:
+                rel = os.path.join("images", source, f"{img_i}.jpg")
+                im.convert("RGB").save(os.path.join(out_dir, rel), quality=90); rels.append(rel); img_i += 1
+            rows.append({"source": source,
+                         "image": (rels if len(rels) != 1 else rels[0]) if rels else None,
+                         "convos": json.loads(ex["convos_json"]),
+                         "n_subsegments": ex["n_subsegments"], "message_weight": ex["message_weight"]})
+        with open(os.path.join(out_dir, f"{source}__validation.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        print(f"  [val_hf] {source} [{hf_split}]: {len(rows)} rows", flush=True)
+    return out_dir
+
+
 def _flatten_convos(row):
     """message_list subsegments -> one multi-turn stream sharing the image; n_subseg for root weighting."""
     convos = row.get("convos") or []
@@ -1010,10 +1045,20 @@ def main():
 
     # Fixed, per-source val set of ready-to-batch examples (comparable + low-variance); else rolling.
     def _build_val_fixed():
-        if cfg.mix_dir:
-            rows = _load_mix_rows(cfg.mix_dir, "validation")
+        val_mix_dir = cfg.mix_dir
+        if cfg.val_hf:   # pull VAL from the shared HF set (reconstruct to a mix-dir layout, then reuse it)
+            if os.path.isdir(cfg.val_hf):     # already-reconstructed local dir (hf_val_to_mixdir output)
+                val_mix_dir = cfg.val_hf
+            else:                              # a HF repo id -> download + reconstruct (needs HF online)
+                val_mix_dir = os.path.join(cfg.out_dir, "_val_hf")
+                if master_process:
+                    hf_val_to_mixdir(cfg.val_hf, cfg.val_hf_split, val_mix_dir)
+                if is_dp:
+                    dist.barrier()
+        if val_mix_dir:
+            rows = _load_mix_rows(val_mix_dir, "validation")
             rng = np.random.RandomState(cfg.seed + 7)
-            return {s: [mix_row_to_example(rows[s][int(i)], cfg.mix_dir)
+            return {s: [mix_row_to_example(rows[s][int(i)], val_mix_dir)
                         for i in rng.permutation(len(rows[s]))[:cfg.val_examples_per_source]]
                     for s in sorted(rows)}
         if cfg.data_dir and not cfg.synthetic:
@@ -1104,6 +1149,7 @@ def main():
             print(f"[data] prefetch with {n_data_workers} worker threads", flush=True)
     else:
         prefetch, train_it = None, _train_iter(cfg, _base_seed)
+    dp_params = [p for p in vgpt.parameters() if p.requires_grad]  # fixed order for the DP grad all-reduce
     vgpt.train()
     t0 = time.perf_counter()
     tokens_cum = 0
@@ -1141,10 +1187,14 @@ def main():
             torch.cuda.synchronize(); t_data = time.perf_counter()
         loss = vgpt(batch, sched)
         loss.backward()
-        if is_dp:                                               # data-parallel: average grads across ranks
-            for p in vgpt.parameters():
-                if p.grad is not None:
-                    dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+        if is_dp:  # average grads across ranks. Iterate a FIXED trainable-param list and fill in zeros for
+                   # any None grad, so every rank issues the SAME all_reduce sequence: a mix micro-batch can
+                   # be all-text on one rank (connector unused -> grad None) while another has images, which
+                   # would otherwise desync the collectives and hang (NCCL timeout).
+            for p in dp_params:
+                if p.grad is None:
+                    p.grad = torch.zeros_like(p)
+                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
         if diag:
             torch.cuda.synchronize(); t_bwd = time.perf_counter()
         torch.nn.utils.clip_grad_norm_(vgpt.parameters(), cfg.grad_clip)

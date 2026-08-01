@@ -6,7 +6,7 @@ import sys
 
 import numpy as np
 
-# This script lives at speedrun/modded-nanogpt/vision/; the molmo2 reference repo is
+# This script lives at speedrun/modded-nanogpt/evals/; the molmo2 reference repo is
 # a sibling of modded-nanogpt at speedrun/molmo2 (two levels up).
 _MOLMO2 = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "molmo2"))
 if _MOLMO2 not in sys.path:
